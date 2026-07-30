@@ -1,0 +1,115 @@
+# Host hardening: firewall (nftables host rules + Docker DOCKER-USER chain),
+# kernel sysctls, and log-shipping scaffolding. Maps to Stage 6 + Lab 5 s4.
+---
+- name: Harden homelab deployment host
+  hosts: homelab
+  become: true
+  vars:
+    # Sources allowed to reach the published web ports (80/443). Default open;
+    # tighten to your LAN/management CIDR for a real deployment.
+    allowed_web_sources: "0.0.0.0/0"
+    # Source(s) allowed to SSH in. Tighten this.
+    management_cidr: "192.168.0.0/24"
+    ssh_port: 22
+
+  handlers:
+    - name: reload nftables
+      ansible.builtin.systemd:
+        name: nftables
+        state: restarted
+        enabled: true
+
+    - name: restart docker firewall unit
+      ansible.builtin.systemd:
+        name: paymenter-fw
+        state: restarted
+        enabled: true
+        daemon_reload: true
+
+  tasks:
+    - name: Install firewall + TLS tooling
+      ansible.builtin.package:
+        name:
+          - nftables
+          - iptables
+          - openssl
+        state: present
+
+    - name: Deploy host nftables ruleset
+      ansible.builtin.template:
+        src: templates/nftables.conf.j2
+        dest: /etc/nftables.conf
+        owner: root
+        group: root
+        mode: "0644"
+        validate: "nft -c -f %s"
+      notify: reload nftables
+
+    - name: Enable + start nftables
+      ansible.builtin.systemd:
+        name: nftables
+        enabled: true
+        state: started
+
+    # Docker publishes ports via its own NAT/filter chains, bypassing the host
+    # INPUT chain. DOCKER-USER is Docker's documented, safe insertion point
+    # (Lab 5 s4.2/s4.4). This unit re-applies the source restriction on every
+    # boot, after docker.service.
+    - name: Install DOCKER-USER firewall script
+      ansible.builtin.template:
+        src: templates/docker-user-fw.sh.j2
+        dest: /usr/local/sbin/paymenter-fw.sh
+        owner: root
+        group: root
+        mode: "0750"
+      notify: restart docker firewall unit
+
+    - name: Install paymenter-fw systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/paymenter-fw.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Paymenter DOCKER-USER firewall rules
+          After=docker.service
+          Requires=docker.service
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/sbin/paymenter-fw.sh
+          RemainAfterExit=yes
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: restart docker firewall unit
+
+    - name: Enable paymenter-fw unit
+      ansible.builtin.systemd:
+        name: paymenter-fw
+        enabled: true
+        daemon_reload: true
+
+    - name: Apply kernel network hardening sysctls
+      ansible.posix.sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        sysctl_set: true
+        state: present
+        reload: true
+      loop:
+        - { name: net.ipv4.conf.all.rp_filter, value: "1" }
+        - { name: net.ipv4.conf.all.accept_redirects, value: "0" }
+        - { name: net.ipv4.conf.all.send_redirects, value: "0" }
+        - { name: net.ipv4.conf.all.accept_source_route, value: "0" }
+        - { name: net.ipv4.tcp_syncookies, value: "1" }
+        - { name: net.ipv6.conf.all.accept_redirects, value: "0" }
+
+    - name: Ensure log directory for shipped container logs exists
+      ansible.builtin.file:
+        path: /var/log/paymenter
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"

@@ -1,0 +1,70 @@
+rules:
+  # -------------------------------------------------------------------------
+  # Lab 3 s2.3 / Lab 4 mass-assignment: config-option injection in the service
+  # upgrade flow. Semgrep `auto` did NOT catch this (Lab 4 s3.1) — it is an
+  # application-specific business rule, so it needs a targeted rule.
+  #
+  # The fix filters submitted option IDs against the product's
+  # `upgradableConfigOptions` allowlist before persisting. This rule fires if
+  # the loop persists config options WITHOUT that in_array() guard — i.e. if
+  # the fix is ever reverted or reintroduced elsewhere.
+  # -------------------------------------------------------------------------
+  - id: paymenter-upgrade-configoption-mass-assignment
+    languages: [php]
+    severity: ERROR
+    message: >-
+      Service-upgrade config options are persisted without validating each
+      submitted option ID against the product's allowlist
+      (upgradableConfigOptions). This is the Lab 3 s2.3 / Lab 4 mass-assignment
+      finding: an attacker can inject arbitrary config_option_id values. Guard
+      the loop with `if (!in_array($optionId, $allowedOptionIds)) { continue; }`.
+    metadata:
+      lab-finding: "Lab 3 s2.3, Lab 4 mass-assignment"
+      cwe: "CWE-915: Improperly Controlled Modification of Dynamically-Determined Object Attributes"
+      references:
+        - docs/test-justification.md
+    patterns:
+      - pattern: |
+          foreach ($this->configOptions as $KEY => $VAL) {
+            ...
+            $ANY->configs()->create([...]);
+            ...
+          }
+      - pattern-not: |
+          foreach ($this->configOptions as $KEY => $VAL) {
+            ...
+            if (!in_array($KEY, $ALLOW)) { ... }
+            ...
+          }
+
+  # -------------------------------------------------------------------------
+  # Lab 3 s6.8 / Lab 4 10.1 / Lab 5 s2.2: `?include=` permission bypass in
+  # ApiController::allowedIncludes(). Root cause: in_array() searches the
+  # VALUES of a nested associative array config('permissions.api.admin'),
+  # never matching a flat dot-notation permission string, so the guard is
+  # always false and every include is granted. Semgrep `auto` returned ZERO
+  # findings here (Lab 4 s3.1).
+  #
+  # The correct check is key-based:
+  #   config('permissions.api.admin.' . $relation . '.view') === null
+  # This rule flags the vulnerable value-search pattern.
+  # -------------------------------------------------------------------------
+  - id: paymenter-allowedincludes-permission-bypass
+    languages: [php]
+    severity: ERROR
+    message: >-
+      Permission check uses in_array() against the nested associative array
+      config('permissions.api.admin'), which searches values not keys and is
+      always false — the Lab 3/Lab 4 `?include=` permission-bypass pattern. Use
+      a key lookup instead, e.g.
+      config('permissions.api.admin.' . $relation . '.view') === null.
+    metadata:
+      lab-finding: "Lab 3 s6.8, Lab 4 10.1, Lab 5 s2.2"
+      cwe: "CWE-285: Improper Authorization"
+      references:
+        - docs/test-justification.md
+    pattern-either:
+      - pattern: in_array(..., config("permissions.api.admin"))
+      - pattern: in_array(..., config('permissions.api.admin'))
+      - pattern: "!in_array(..., config(\"permissions.api.admin\"))"
+      - pattern: "!in_array(..., config('permissions.api.admin'))"

@@ -1,0 +1,22 @@
+# secrets — mounted at runtime by Ansible/compose, never committed
+docker/secrets/*
+!docker/secrets/.gitkeep
+.env
+*.env
+
+# raw (non-redacted) developer engagement evidence
+evidence/developer-engagement/raw/
+
+# scan/report output
+*.sarif
+*-results.json
+*-results.xml
+*-report.html
+reports/
+
+# tooling
+node_modules/
+vendor/
+__pycache__/
+*.pyc
+.DS_Store

@@ -1,0 +1,124 @@
+# Hardened deployment topology for Paymenter.
+#
+# Network segmentation (spec Stage 5 / Lab 5 s4.3):
+#   frontend  - reverse proxy only; the ONLY tier that publishes host ports
+#   app       - reverse proxy <-> application
+#   db        - application <-> database/cache; marked internal (no egress,
+#               unreachable from the frontend tier)
+#
+# Secrets are read from ./secrets/* at runtime (gitignored, provisioned by
+# Ansible) and never baked into an image layer.
+
+x-security: &hardening
+  security_opt:
+    - no-new-privileges:true
+  restart: always
+
+services:
+  reverse-proxy:
+    <<: *hardening
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./reverse-proxy/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./reverse-proxy/conf.d:/etc/nginx/conf.d:ro
+      - ./secrets/certs:/etc/nginx/certs:ro
+      - certbot-webroot:/var/www/certbot:ro
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE, CHOWN, SETGID, SETUID]
+    depends_on:
+      paymenter:
+        condition: service_healthy
+    networks: [frontend, app]
+
+  paymenter:
+    <<: *hardening
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.paymenter
+    image: paymenter:local
+    environment:
+      APP_ENV: "production"
+      APP_DEBUG: "false"
+      APP_URL: "https://paymenter.homelab.local"
+      ASSET_URL: "https://paymenter.homelab.local"
+      SESSION_SECURE_COOKIE: "true"
+      TRUSTED_PROXIES: "*"
+      DB_CONNECTION: "mariadb"
+      DB_HOST: "database"
+      DB_PORT: "3306"
+      DB_DATABASE: "paymenter"
+      DB_USERNAME: "paymenter"
+      DB_PASSWORD_FILE: "/run/secrets/db_password"
+      APP_KEY_FILE: "/run/secrets/app_key"
+      CACHE_STORE: "redis"
+      QUEUE_CONNECTION: "redis"
+      REDIS_HOST: "cache"
+      REDIS_PORT: "6379"
+      PAYMENTER_SKIP_DEFAULT: "false"
+    secrets: [app_key, db_password]
+    volumes:
+      - app-var:/app/var
+      - app-storage-logs:/app/storage/logs
+      - app-storage-public:/app/storage/app/public
+    cap_drop: [ALL]
+    networks: [app, db]
+
+  database:
+    <<: *hardening
+    image: mariadb:11.4
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      MARIADB_DATABASE: "paymenter"
+      MARIADB_USER: "paymenter"
+      MARIADB_PASSWORD_FILE: "/run/secrets/db_password"
+      MARIADB_ROOT_PASSWORD_FILE: "/run/secrets/db_root_password"
+    secrets: [db_password, db_root_password]
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks: [db]
+
+  cache:
+    <<: *hardening
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - cache-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks: [db]
+
+networks:
+  frontend:
+    driver: bridge
+  app:
+    driver: bridge
+  db:
+    driver: bridge
+    internal: true
+
+volumes:
+  app-var:
+  app-storage-logs:
+  app-storage-public:
+  db-data:
+  cache-data:
+  certbot-webroot:
+
+secrets:
+  app_key:
+    file: ./secrets/app_key
+  db_password:
+    file: ./secrets/db_password
+  db_root_password:
+    file: ./secrets/db_root_password

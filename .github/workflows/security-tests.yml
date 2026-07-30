@@ -1,0 +1,134 @@
+name: Security Tests & Post-Deploy Validation
+
+# Runs after a successful deploy (Stage 3 regression suite + Stage 6 DAST /
+# config audit) against the live homelab instance. Also runnable on demand.
+on:
+  workflow_run:
+    workflows: ["Build, Scan, Deploy"]
+    types: [completed]
+  workflow_dispatch:
+
+env:
+  BASE_URL: ${{ vars.BASE_URL || 'https://paymenter.homelab.local' }}
+  VERIFY_TLS: ${{ vars.VERIFY_TLS || 'false' }}
+
+jobs:
+  gate:
+    runs-on: self-hosted
+    outputs:
+      go: ${{ steps.check.outputs.go }}
+    steps:
+      - id: check
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || \
+             [ "${{ github.event.workflow_run.conclusion }}" = "success" ]; then
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "go=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ---- Stage 3: scripted security regression suite --------------------------
+  regression-tests:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install test deps
+        working-directory: security/tests
+        run: pip install -r requirements.txt --break-system-packages
+      - name: Run regression suite
+        working-directory: security/tests
+        env:
+          BASE_URL: ${{ env.BASE_URL }}
+          VERIFY_TLS: ${{ env.VERIFY_TLS }}
+          ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
+          LOWPRIV_API_TOKEN: ${{ secrets.LOWPRIV_API_TOKEN }}
+          LOWPRIV_ROLE_ID: ${{ vars.LOWPRIV_ROLE_ID }}
+          CUSTOMER_COOKIE: ${{ secrets.CUSTOMER_COOKIE }}
+          REMEMBER_COOKIE: ${{ secrets.REMEMBER_COOKIE }}
+          EXPIRED_COOKIE: ${{ secrets.EXPIRED_COOKIE }}
+          UPGRADE_SERVICE_ID: ${{ vars.UPGRADE_SERVICE_ID }}
+          CHECKOUT_PRODUCT_ID: ${{ vars.CHECKOUT_PRODUCT_ID }}
+          RACE_COUPON_CODE: ${{ secrets.RACE_COUPON_CODE }}
+        run: pytest
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-tests-results
+          path: security/tests/security-tests-results.xml
+
+  # ---- Stage 6: ZAP baseline DAST -------------------------------------------
+  post-deploy-zap:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: ${{ env.BASE_URL }}
+          rules_file_name: 'security/zap/rules.tsv'
+          fail_action: true
+          allow_issue_writing: false
+
+  # ---- Stage 6: Nikto (informational; diff against Lab 5 baseline) ----------
+  post-deploy-nikto:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
+    runs-on: self-hosted
+    continue-on-error: true
+    steps:
+      - name: Run Nikto
+        run: |
+          if command -v nikto >/dev/null 2>&1; then
+            nikto -h "${BASE_URL}" -nossl -o nikto-report.html -Format htm || true
+          else
+            docker run --rm --network host ghcr.io/sullo/nikto:latest \
+              -h "${BASE_URL}" -o - -Format txt > nikto-report.html || true
+          fi
+      - name: Upload Nikto report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nikto-report
+          path: nikto-report.html
+
+  # ---- Stage 6: config audit (hardening still holds) ------------------------
+  post-deploy-config-audit:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assert hardening still holds
+        env:
+          BASE_URL: ${{ env.BASE_URL }}
+        run: bash security/tests/config-audit.sh
+
+  notify:
+    needs: [regression-tests, post-deploy-zap, post-deploy-config-audit]
+    if: failure()
+    runs-on: self-hosted
+    permissions:
+      issues: write
+    steps:
+      - name: Post to Discord
+        if: ${{ secrets.DISCORD_WEBHOOK_URL != '' }}
+        run: |
+          curl -H "Content-Type: application/json" -X POST \
+            -d "{\"content\": \"Post-deploy security validation failed on ${{ github.repository }} — run ${{ github.run_id }}: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
+            "${{ secrets.DISCORD_WEBHOOK_URL }}"
+      - name: Open GitHub Issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Post-deploy security validation failure — run ${context.runId}`,
+              body: `Regression suite / ZAP / config-audit failed. See ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              labels: ['security']
+            });

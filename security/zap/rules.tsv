@@ -1,0 +1,22 @@
+# ZAP Baseline alert policy for Paymenter.
+# Format: <pluginId>	<action WARN|IGNORE|FAIL>	<optional note>
+# Docs: https://www.zaproxy.org/docs/docker/baseline-scan/
+#
+# Default action for unlisted rules is set via the workflow (-l FAIL for the
+# gate). Listed rules below tune noise the labs already triaged.
+#
+# --- Fail on the classes tied to our findings -----------------------------
+10038	FAIL	Content Security Policy (CSP) header not set
+10020	FAIL	Missing Anti-clickjacking / X-Frame-Options
+10021	FAIL	X-Content-Type-Options header missing
+10035	FAIL	Strict-Transport-Security header
+10098	FAIL	Cross-Domain Misconfiguration (CORS wildcard) — Lab 5 s2.5
+#
+# --- Warn (informational; not a gate) -------------------------------------
+10015	WARN	Incomplete or no cache-control header
+10096	WARN	Timestamp disclosure
+10027	WARN	Information disclosure - suspicious comments
+10037	WARN	Server leaks info via X-Powered-By
+#
+# --- Ignore (known-accepted for this app) ---------------------------------
+10054	IGNORE	Cookie without SameSite — XSRF-TOKEN must be JS-readable by design

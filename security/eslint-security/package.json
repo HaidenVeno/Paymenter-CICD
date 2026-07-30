@@ -1,0 +1,11 @@
+{
+  "name": "paymenter-eslint-security",
+  "version": "1.0.0",
+  "private": true,
+  "description": "eslint-plugin-security config for scanning Paymenter first-party JS (themes/default/js). Reuses/extends the Lab 4 s3.2 setup.",
+  "type": "module",
+  "devDependencies": {
+    "eslint": "^9.15.0",
+    "eslint-plugin-security": "^3.0.1"
+  }
+}

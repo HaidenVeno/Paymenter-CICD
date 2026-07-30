@@ -1,0 +1,107 @@
+# syntax=docker/dockerfile:1
+#
+# Hardened multi-stage build for the Paymenter application.
+#
+# Design decisions mapped to Lab findings (see docs/test-justification.md):
+#   * Multi-stage: compilers/build tooling never reach the final image.
+#   * Pinned base image tags (swap to @sha256 digests for full supply-chain
+#     pinning once you've resolved them on the runner: `docker buildx imagetools
+#     inspect php:8.3.14-fpm-alpine3.20`).
+#   * Runs as the unprivileged `nginx` user end-to-end — nginx listens on 8080,
+#     and the root `crond` scheduler is replaced by a supervised `schedule:work`
+#     (Lab 5 s3.3 non-root request handling, hardened further).
+#   * No secrets baked into any layer. APP_KEY / DB_PASSWORD are injected at
+#     runtime via env or *_FILE secret mounts (Lab 5 s3.1 / s3.4).
+#   * storage permissions are 775, never 777 (Lab 4/5 secret + file-perms theme).
+#   * HEALTHCHECK defined so the reverse proxy / compose can gate on readiness.
+#
+# The application source is cloned at build time (pinned repo + ref) rather than
+# copied from context, so this pipeline repo stays independent of the app repo.
+
+ARG PAYMENTER_REPO=https://github.com/HaidenVeno/Paymenter.git
+ARG PAYMENTER_REF=fix/upgrade-configoptions-injection
+
+# ---------------------------------------------------------------------------
+# Stage 0: fetch pinned application source
+# ---------------------------------------------------------------------------
+FROM alpine/git:2.47.1 AS source
+ARG PAYMENTER_REPO
+ARG PAYMENTER_REF
+WORKDIR /src
+RUN git clone --depth 1 --branch "${PAYMENTER_REF}" "${PAYMENTER_REPO}" . \
+    && rm -rf .git
+
+# ---------------------------------------------------------------------------
+# Stage 1: PHP dependencies + application (build tools present here only)
+# ---------------------------------------------------------------------------
+FROM php:8.3.14-fpm-alpine3.20 AS final
+WORKDIR /app
+
+RUN apk add --no-cache --update \
+        ca-certificates curl supervisor tar unzip nginx \
+        libpng-dev libxml2-dev libzip-dev icu-dev gmp-dev \
+    && apk add --no-cache --virtual .build-deps \
+        autoconf make g++ gcc libc-dev linux-headers \
+    && docker-php-ext-configure zip \
+    && docker-php-ext-install bcmath gd pdo_mysql zip intl sockets gmp \
+    && pecl install redis \
+    && docker-php-ext-enable redis \
+    && apk del .build-deps
+RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+
+COPY --from=source /src/composer.json /src/composer.lock ./
+RUN composer install --no-dev --no-autoloader --no-scripts
+
+COPY --from=source /src ./
+RUN composer install --no-dev --optimize-autoloader
+
+RUN rm -rf bootstrap/cache/*.php \
+    && rm -f /usr/local/etc/php-fpm.conf \
+    && mkdir -p /var/run/php /var/run/nginx /var/log/supervisord /var/log/nginx /run/nginx \
+    && chmod -R 775 bootstrap storage
+
+# ---------------------------------------------------------------------------
+# Stage 2: frontend asset build (node tooling stays out of the final image)
+# ---------------------------------------------------------------------------
+FROM node:22.12-alpine3.20 AS build
+WORKDIR /app
+COPY --from=source /src/package.json /src/package-lock.json ./
+# `npm ci` for reproducible, lockfile-pinned installs (SCA integrity). If the
+# fork's lockfile is out of sync, regenerate it rather than falling back to
+# `npm install`, so the SBOM/Snyk scans stay meaningful.
+RUN npm ci
+COPY --from=source /src ./
+COPY --from=final /app/vendor /app/vendor
+RUN npm run build
+
+# ---------------------------------------------------------------------------
+# Stage 3: production image
+# ---------------------------------------------------------------------------
+FROM final AS production
+COPY --from=build /app/public /app/public
+
+# Snapshot defaults for the entrypoint's theme/extension renewal step.
+RUN cp -r /app/themes /app/themes_default \
+    && cp -r /app/extensions /app/extensions_default
+
+ENV PAYMENTER_SKIP_DEFAULT=false
+
+# Hardened runtime configs override the app's bundled ones.
+COPY docker/paymenter/nginx-app.conf   /etc/nginx/http.d/default.conf
+COPY docker/paymenter/www.conf         /usr/local/etc/php-fpm.conf
+COPY docker/paymenter/supervisord.conf /etc/supervisord.conf
+COPY docker/paymenter/entrypoint.sh    /entrypoint.sh
+
+RUN chmod +x /entrypoint.sh \
+    && chown -R nginx:nginx /app /var/log/supervisord /var/log/nginx /run/nginx /var/lib/nginx \
+    && chmod -R 775 /app/storage
+
+USER nginx
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8080/ || exit 1
+
+ENTRYPOINT [ "/bin/ash", "/entrypoint.sh" ]
+CMD [ "supervisord", "-n", "-c", "/etc/supervisord.conf" ]

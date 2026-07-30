@@ -1,0 +1,37 @@
+#!/usr/sbin/nft -f
+# Managed by Ansible (harden.yml). Host-facing traffic only — container
+# published-port filtering is handled separately in the DOCKER-USER chain
+# (paymenter-fw.sh), because Docker bypasses this INPUT chain for those.
+
+flush ruleset
+
+table inet filter {
+    chain input {
+        type filter hook input priority 0; policy drop;
+
+        iif "lo" accept
+        ct state established,related accept
+        ct state invalid drop
+
+        # ICMP diagnostics (restricted to the management network)
+        ip  saddr {{ management_cidr }} icmp  type echo-request accept
+        ip6 nexthdr icmpv6 icmpv6 type { echo-request, nd-neighbor-solicit, nd-router-advert, nd-neighbor-advert } accept
+
+        # SSH from management network only
+        ip saddr {{ management_cidr }} tcp dport {{ ssh_port }} accept
+
+        # Published web ports (nginx reverse proxy). Note: Docker's own NAT may
+        # short-circuit this for container ports; DOCKER-USER is the primary
+        # control. This rule covers host-process listeners on the same ports.
+        ip saddr {{ allowed_web_sources }} tcp dport { 80, 443 } accept
+    }
+
+    chain forward {
+        type filter hook forward priority 0; policy accept;
+        # Container-to-container forwarding is governed by Docker's own chains.
+    }
+
+    chain output {
+        type filter hook output priority 0; policy accept;
+    }
+}

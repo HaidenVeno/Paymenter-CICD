@@ -1,0 +1,23 @@
+rules:
+  # -------------------------------------------------------------------------
+  # Lab 5 file-permissions theme: the upstream Dockerfile/entrypoint used
+  # `chmod 777` on bootstrap/storage. Fail the build if world-writable perms
+  # are reintroduced anywhere (Dockerfiles, entrypoints, Ansible, scripts).
+  # -------------------------------------------------------------------------
+  - id: paymenter-world-writable-chmod-777
+    languages: [generic]
+    severity: ERROR
+    message: >-
+      World-writable permissions (777) reintroduced. Lab 5 flagged 777 on
+      storage/secrets; use 775 for app dirs and 660/600 for secret material.
+    metadata:
+      lab-finding: "Lab 5 file-permissions / secret handling"
+      cwe: "CWE-732: Incorrect Permission Assignment for Critical Resource"
+    paths:
+      include:
+        - "*.sh"
+        - "Dockerfile*"
+        - "docker/**"
+        - "ansible/**"
+    patterns:
+      - pattern-regex: 'chmod\s+(-[A-Za-z]+\s+)*0?777\b'

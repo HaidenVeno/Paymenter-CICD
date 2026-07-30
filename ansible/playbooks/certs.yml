@@ -1,0 +1,49 @@
+# Provision TLS material for the reverse proxy into docker/secrets/certs/.
+# Default: self-signed cert for the homelab hostname (works offline for a
+# .local name). Set use_certbot=true + a real domain for Let's Encrypt.
+---
+- name: Provision TLS certificates
+  hosts: homelab
+  become: true
+  vars:
+    repo_root: "{{ playbook_dir }}/../.."
+    certs_dir: "{{ repo_root }}/docker/secrets/certs"
+    tls_hostname: "paymenter.homelab.local"
+    use_certbot: false
+
+  tasks:
+    - name: Ensure certs directory exists (private)
+      ansible.builtin.file:
+        path: "{{ certs_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Generate self-signed certificate if absent
+      when: not use_certbot
+      ansible.builtin.shell:
+        cmd: >-
+          openssl req -x509 -nodes -newkey rsa:2048
+          -keyout '{{ certs_dir }}/privkey.pem'
+          -out '{{ certs_dir }}/fullchain.pem'
+          -days 365
+          -subj '/CN={{ tls_hostname }}'
+          -addext 'subjectAltName=DNS:{{ tls_hostname }}'
+        creates: "{{ certs_dir }}/fullchain.pem"
+
+    - name: Set certificate permissions
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ certs_dir }}/privkey.pem", mode: "0600" }
+        - { path: "{{ certs_dir }}/fullchain.pem", mode: "0644" }
+      when: not use_certbot
+
+    - name: Certbot guidance
+      when: use_certbot
+      ansible.builtin.debug:
+        msg: >-
+          use_certbot=true: run certbot with the webroot plugin against the
+          certbot-webroot volume (docker/reverse-proxy handles the ACME path),
+          then symlink live/{{ tls_hostname }}/fullchain.pem and privkey.pem
+          into {{ certs_dir }}. See docs/maintenance-guide.md.

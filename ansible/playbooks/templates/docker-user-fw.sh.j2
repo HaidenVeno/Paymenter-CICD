@@ -1,0 +1,17 @@
+#!/bin/sh
+# Managed by Ansible (harden.yml). Restrict access to Docker-published ports
+# via the DOCKER-USER chain — Docker's documented, empty-by-default insertion
+# point that it never programmatically modifies (Lab 5 s4.2/s4.4).
+#
+# Only additive `-I` inserts; never flush Docker-managed tables.
+set -eu
+
+# Idempotency: delete our prior rules (ignore if absent) before re-inserting.
+while iptables -D DOCKER-USER -m comment --comment "paymenter-fw" -j DROP 2>/dev/null; do :; done
+while iptables -D DOCKER-USER -s {{ allowed_web_sources }} -p tcp -m multiport --dports 80,443 -m comment --comment "paymenter-fw" -j RETURN 2>/dev/null; do :; done
+
+# Allow the permitted web sources to reach 80/443, drop everyone else that
+# reaches a published container port. Rules are evaluated top-down; RETURN
+# hands allowed traffic back to Docker's normal processing.
+iptables -I DOCKER-USER 1 -s {{ allowed_web_sources }} -p tcp -m multiport --dports 80,443 -m comment --comment "paymenter-fw" -j RETURN
+iptables -I DOCKER-USER 2 -p tcp -m multiport --dports 80,443 -m comment --comment "paymenter-fw" -j DROP
