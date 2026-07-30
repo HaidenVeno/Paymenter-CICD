@@ -47,6 +47,16 @@ security/semgrep/rules` before pushing.
 - **ZAP / config-audit** → a header/CORS/TLS/perms hardening step reverted.
 - A Discord message + GitHub Issue (label `security`) is opened automatically.
 
+## Watching the stack (Portainer)
+A web GUI for container status/health/logs/stats and the network segmentation,
+run as a separate management plane behind a read-only docker-socket-proxy:
+```bash
+docker compose -f docker/monitoring/docker-compose.portainer.yml up -d
+# https://localhost:9443 on the host (or ssh -L 9443:localhost:9443 user@homelab)
+```
+Details + how to enable management mode: `docker/monitoring/README.md`. The
+GitHub Actions tab visualizes the pipeline runs themselves (job graph + logs).
+
 ## Runner service
 ```bash
 sudo ./svc.sh status      # health

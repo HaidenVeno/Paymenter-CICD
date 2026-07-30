@@ -1,0 +1,76 @@
+# Portainer management/visualization plane — SEPARATE from the app stack so it
+# never touches the frontend/app/db segmentation and its lifecycle is decoupled
+# from deploys.
+#
+# Security posture (this is a hardening project, so the monitoring tool is
+# hardened too):
+#   * Portainer never sees the raw Docker socket. A read-only docker-socket-proxy
+#     sits in front of it and only permits GET/view API calls (POST/EXEC denied),
+#     so a Portainer compromise cannot start/stop/exec/redeploy anything.
+#   * The UI binds to localhost by default. Reach it from the homelab host's
+#     browser, or tunnel: `ssh -L 9443:localhost:9443 user@homelab`. Set
+#     PORTAINER_BIND=<lan-ip> only if you accept exposing the UI on the network.
+#
+# Run on the LINUX homelab host (needs /var/run/docker.sock):
+#   docker compose -f docker/monitoring/docker-compose.portainer.yml up -d
+name: paymenter-monitoring
+
+services:
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest   # pin to a digest for reproducibility
+    restart: always
+    environment:
+      # --- allowed (read-only viewing) ---
+      CONTAINERS: 1
+      IMAGES: 1
+      NETWORKS: 1
+      VOLUMES: 1
+      SERVICES: 1
+      TASKS: 1
+      NODES: 1
+      INFO: 1
+      VERSION: 1
+      PING: 1
+      EVENTS: 1
+      # --- denied (mutating / dangerous) ---
+      POST: 0          # blocks create/start/stop/restart/kill
+      EXEC: 0
+      BUILD: 0
+      COMMIT: 0
+      CONFIGS: 0
+      SECRETS: 0
+      SWARM: 0
+      SYSTEM: 0
+      AUTH: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /run
+    networks:
+      - mgmt
+
+  portainer:
+    image: portainer/portainer-ce:lts   # pin to a digest for reproducibility
+    restart: always
+    # Point Portainer at the proxy instead of a local socket.
+    command: -H tcp://socket-proxy:2375
+    ports:
+      - "${PORTAINER_BIND:-127.0.0.1}:9443:9443"
+    volumes:
+      - portainer-data:/data
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - socket-proxy
+    networks:
+      - mgmt
+
+networks:
+  mgmt:
+    driver: bridge
+
+volumes:
+  portainer-data:
