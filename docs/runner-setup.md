@@ -4,7 +4,44 @@ The pipeline executes entirely on your homelab. GitHub's cloud is only the code
 host, trigger, and Issues surface — see the on-premise justification in
 [../README.md](../README.md).
 
-## 1. Register the runner
+## Quick start — one command (any Linux machine)
+
+`scripts/runner-up.sh` downloads, configures, and starts the runner. The same
+script works on WSL2-Ubuntu and the homelab — register each machine once, then
+re-run to start it anytime:
+
+```bash
+REPO=<owner>/<repo> ./scripts/runner-up.sh            # if gh is installed+auth'd
+REPO=<owner>/<repo> RUNNER_TOKEN=<token> ./scripts/runner-up.sh   # else paste a token
+```
+
+Both machines can stay registered; a job runs on whichever runner is online. If
+both are up, steer specific jobs with labels — e.g. register the homelab with
+`LABELS=self-hosted,homelab` and set the deploy job to `runs-on: [self-hosted,
+homelab]`, so deploys only ever land on the homelab.
+
+### Running it in WSL2 first (this dev machine)
+
+You currently have no general-purpose WSL distro (only Docker's internal one), so
+one-time:
+
+```powershell
+wsl --install -d Ubuntu          # reboot / create a UNIX user when prompted
+```
+Then Docker Desktop → Settings → Resources → WSL Integration → enable **Ubuntu**
+(so `docker` works inside it). Inside Ubuntu:
+```bash
+sudo apt-get update && sudo apt-get install -y curl
+# optional but makes the runner script one-command:
+#   sudo apt-get install -y gh && gh auth login
+REPO=<owner>/<repo> ./scripts/runner-up.sh
+```
+
+**WSL2 caveat:** build/scan/test stages work (they share Docker Desktop). The
+`deploy`/Ansible/nftables stages are real Linux-host operations (systemd,
+firewall) that don't meaningfully apply in WSL2 — run those on the homelab.
+
+## 1. Register the runner (manual, what the script automates)
 
 On the homelab host (or a dedicated VM/container on it — record which, it
 affects your segmentation diagram):
