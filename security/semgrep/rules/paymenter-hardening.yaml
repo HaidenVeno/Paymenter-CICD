@@ -17,7 +17,7 @@ rules:
       include:
         - "*.sh"
         - "Dockerfile*"
-        - "docker/**"
-        - "ansible/**"
+        - "**/docker/**"
+        - "**/ansible/**"
     patterns:
       - pattern-regex: 'chmod\s+(-[A-Za-z]+\s+)*0?777\b'

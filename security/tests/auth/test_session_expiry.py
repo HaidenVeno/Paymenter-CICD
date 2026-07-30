@@ -26,14 +26,15 @@ def test_http_redirects_to_https(base_url):
 @pytest.mark.edge
 def test_session_cookie_is_secure(http, base_url):
     r = http.get(f"{base_url}/login")
-    set_cookie = r.headers.get("Set-Cookie", "")
-    if "paymenter_session" not in set_cookie:
-        pytest.skip("No paymenter_session Set-Cookie on /login in this response")
+    # Use the parsed cookie jar, not raw-header string splitting: the Expires
+    # attribute contains a comma ("Thu, 30 Jul ...") that fragments a naive
+    # split and hides the Secure flag.
+    session_cookies = [c for c in r.cookies if c.name == "paymenter_session"]
+    if not session_cookies:
+        pytest.skip("No paymenter_session cookie on /login in this response")
     # The session cookie must carry Secure (SESSION_SECURE_COOKIE=true).
-    seg = [c for c in set_cookie.split(",") if "paymenter_session" in c]
-    assert any("Secure" in s for s in seg), (
-        "paymenter_session Set-Cookie is missing the Secure attribute "
-        "(Lab 5 s3.8)."
+    assert session_cookies[0].secure, (
+        "paymenter_session cookie is missing the Secure attribute (Lab 5 s3.8)."
     )
 
 
