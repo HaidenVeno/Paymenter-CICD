@@ -14,11 +14,15 @@ executed on the self-hosted runner against the live instance.
 - [ ] **Incomplete** — runner registration is a homelab action (see
   `docs/runner-setup.md`). All workflows target `runs-on: self-hosted`.
 
-## Stage 2 — SAST + SCA (`ci.yml`)
-- [x] **Done** — Semgrep (custom blocking rules + report-only packs),
-  ESLint-security, OWASP Dependency-Check jobs written; thresholds documented.
-- [ ] **Incomplete** — "fails on reintroduced high-severity issue" demo: run on
-  the runner and confirm a deliberate regression reddens the build.
+## Stage 2 — SAST, Secrets, IaC & SCA (`ci.yml`)
+- [x] **Done** — Semgrep (custom rules + `p/default`/`p/owasp-top-ten` ERROR gate
+  + report-only packs), ESLint-security, **Gitleaks** (secrets), **Hadolint**
+  (Dockerfile), **Trivy config** (IaC), OWASP Dependency-Check. All gates
+  calibrated against the real app; thresholds documented.
+- [x] **Done (locally proven)** — detection verified: custom rules fire on the
+  vulnerable code; a planted OS-command-injection/`eval` is caught by `p/default`
+  and ESLint (build-failing); Gitleaks caught planted tokens.
+- [ ] **Incomplete** — same demo executed on the self-hosted runner (Actions UI).
 
 ## Stage 3 — Automated security test cases (`security-tests.yml`)
 - [x] **Done** — 11 test modules / 28 cases covering all 9 table rows + OAuth

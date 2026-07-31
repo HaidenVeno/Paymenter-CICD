@@ -37,6 +37,9 @@ RUN git clone --depth 1 --branch "${PAYMENTER_REF}" "${PAYMENTER_REPO}" . \
 FROM php:8.3.14-fpm-alpine3.20 AS final
 WORKDIR /app
 
+# Fail a pipeline (e.g. curl | php) if any stage errors, not just the last.
+SHELL ["/bin/ash", "-o", "pipefail", "-c"]
+
 RUN apk add --no-cache --update \
         ca-certificates curl supervisor tar unzip nginx \
         libpng-dev libxml2-dev libzip-dev icu-dev gmp-dev \
@@ -101,7 +104,7 @@ USER nginx
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8080/ || exit 1
+    CMD ["curl", "-fsS", "http://127.0.0.1:8080/"]
 
 ENTRYPOINT [ "/bin/ash", "/entrypoint.sh" ]
 CMD [ "supervisord", "-n", "-c", "/etc/supervisord.conf" ]

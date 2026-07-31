@@ -1,0 +1,15 @@
+# Hadolint config for the Paymenter image. failure-threshold=warning means
+# warnings and errors fail CI; info/style do not.
+failure-threshold: warning
+
+ignored:
+  # DL3018: pin apk versions. Alpine package versions are tied to the base
+  # image digest and rotate frequently; pinning every apk package is brittle
+  # and commonly waived. Base image itself is pinned, which is the real control.
+  - DL3018
+  # DL3066: non-numeric user id. We intentionally run as the named `nginx`
+  # user, which is resolvable inside the image. False positive here.
+  - DL3066
+
+trustedRegistries:
+  - docker.io

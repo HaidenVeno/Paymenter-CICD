@@ -54,6 +54,22 @@ evidence/            developer-engagement (redacted; raw is gitignored)
 | 777 perms, root container, no TLS (L5 §3.x) | `Dockerfile.paymenter` + compose + Ansible |
 | Vulnerable dependencies (L4 §6.3) | Dependency-Check + Trivy |
 
+## Scanning layers (industry-standard free tooling)
+
+Each layer catches a class the others miss; every gate is calibrated to pass on
+current code and fail on a regression (see `docs/test-justification.md`).
+
+| Layer | Tool | Gate |
+|---|---|---|
+| SAST (code) | Semgrep — custom rules + `p/default` + `p/owasp-top-ten` | ERROR-severity + custom rules |
+| SAST (JS) | ESLint (`eslint-plugin-security`) | on error |
+| Secrets | Gitleaks | any leak |
+| Dockerfile | Hadolint | warning threshold |
+| IaC / container | Trivy config | HIGH/CRITICAL |
+| Dependencies (SCA) | OWASP Dependency-Check | CVSS ≥ 7 |
+| Image | Trivy image scan | unfixed CRITICAL |
+| DAST | ZAP baseline + Nikto | header/CORS rules |
+
 ## Getting started
 
 1. **Register the runner + secrets** → [docs/runner-setup.md](docs/runner-setup.md).

@@ -1,0 +1,15 @@
+# Gitleaks config for the Paymenter pipeline. Extends the default ruleset and
+# allowlists paths that produce noise rather than real leaked secrets.
+title = "Paymenter gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Non-secret noise paths"
+paths = [
+  '''\.git/''',
+  '''(^|/)vendor/''',
+  '''(^|/)node_modules/''',
+  '''\.env\.example$''',
+]
