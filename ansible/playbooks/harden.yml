@@ -1,8 +1,8 @@
 # Host hardening: firewall (nftables host rules + Docker DOCKER-USER chain),
 # kernel sysctls, and log-shipping scaffolding. Maps to Stage 6 + Lab 5 s4.
 ---
-- name: Harden homelab deployment host
-  hosts: homelab
+- name: Harden the deployment host
+  hosts: "{{ deploy_target | default('staging') }}"
   become: true
   vars:
     # Sources allowed to reach the published web ports (80/443). Default open;

@@ -3,7 +3,7 @@
 # .local name). Set use_certbot=true + a real domain for Let's Encrypt.
 ---
 - name: Provision TLS certificates
-  hosts: homelab
+  hosts: "{{ deploy_target | default('staging') }}"
   become: true
   vars:
     repo_root: "{{ playbook_dir }}/../.."
