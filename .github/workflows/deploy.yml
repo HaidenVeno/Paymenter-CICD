@@ -91,8 +91,6 @@ jobs:
   deploy:
     needs: trivy-scan
     runs-on: self-hosted
-    permissions:
-      actions: write  # gh variable set (STAGING_VALIDATED_DIGEST)
     steps:
       - uses: actions/checkout@v4
 
@@ -142,6 +140,13 @@ jobs:
       # mutable tag, so "build once, promote the same bits" is provable, not
       # just intended. Registry is local (see docs/allowlist.md for the
       # TLS/trust design) and reachable over mgmtnet only.
+      # GITHUB_TOKEN structurally cannot manage repo Actions variables —
+      # that needs repo-admin scope, which isn't among the scopes grantable
+      # to the ephemeral token via `permissions:` no matter what's declared
+      # (confirmed: 403 "Resource not accessible by integration" even with
+      # actions: write). Deliberately NOT setting GH_TOKEN here so `gh`
+      # falls back to the Runner's own persistent `gh auth login` session
+      # (already relied on elsewhere in this project — see CLAUDE.md).
       - name: Push scanned+healthy image to the local registry
         run: |
           docker tag "paymenter:${{ github.sha }}" registry.homelab.local:5000/paymenter:${{ github.sha }}
@@ -149,8 +154,6 @@ jobs:
           DIGEST=$(grep -oP 'digest: \Ksha256:[0-9a-f]+' push.log)
           echo "Pushed digest: $DIGEST"
           gh variable set STAGING_VALIDATED_DIGEST --body "$DIGEST"
-        env:
-          GH_TOKEN: ${{ github.token }}
 
       - if: always()
         uses: ./.github/actions/reclaim-workspace
