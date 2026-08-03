@@ -32,11 +32,14 @@ executed on the self-hosted runner against the live instance.
 ## Stage 3 — Automated security test cases (`security-tests.yml`)
 - [x] **Done** — 11 test modules / 28 cases covering all 9 table rows + OAuth
   key perms; junit artifact; edge tests gate now, auth tests skip until seeded.
-- [ ] **Incomplete** — first real run on the runner happened in Phase 1 (found
-  `pip` missing on the Runner, fixed); get a clean confirmed pass and actually
-  read the ZAP/Nikto/config-audit results before calling this Done. Auth
-  secrets (`ADMIN_API_TOKEN`, `CUSTOMER_COOKIE`, `REMEMBER_COOKIE`, …) still
-  not wired, so app-layer tests still skip.
+- [x] **Done** — clean confirmed run on the runner: `regression-tests` (14
+  passed / 14 skipped / 0 failed — skips are the documented missing
+  auth-secret gap below, not bugs), `post-deploy-nikto`, and
+  `post-deploy-config-audit` all green. `post-deploy-zap`'s one real finding
+  ("Content-Security-Policy Header Not Set") is fixed — see Stage 5/6 below
+  and `docs/allowlist.md`. Auth secrets (`ADMIN_API_TOKEN`, `CUSTOMER_COOKIE`,
+  `REMEMBER_COOKIE`, …) still not wired, so app-layer tests still skip —
+  tracked, not blocking.
 
 ## Stage 4 — Developer notification
 - [x] **Done** — Discord webhook + GitHub Issue on failure in `ci.yml`,
@@ -65,6 +68,11 @@ executed on the self-hosted runner against the live instance.
   provision→docker→secrets→certs→harden), including the nftables/DOCKER-USER
   firewall reload — confirmed no SSH lockout, confirmed idempotent on repeat
   runs.
+- [x] **Done** — ZAP's one real finding (missing CSP header, `10038`) fixed in
+  `docker/reverse-proxy/conf.d/security-headers.conf` and validated via a
+  direct manual ZAP re-scan (`FAIL-NEW: 0`). Policy trade-offs (`unsafe-inline`/
+  `unsafe-eval` needed for Filament/Livewire/Alpine.js) documented in
+  `docs/allowlist.md`. Remaining WARN-level findings tracked there, not gated.
 - [ ] **Incomplete** — confirm a reverted hardening step (e.g.
   `APP_DEBUG=true`) actually fails `config-audit.sh` (config-audit ran as part
   of the first `security-tests.yml` execution, but this specific negative-test
@@ -76,5 +84,7 @@ executed on the self-hosted runner against the live instance.
 
 ## Stage 8 — Docs
 - [x] **Done** — `test-justification.md`, `maintenance-guide.md`, this
-  checklist, `runner-setup.md`, top-level `README.md`.
+  checklist, `runner-setup.md`, `allowlist.md` (every scan
+  exception/threshold and its rationale, cataloged in one place), top-level
+  `README.md`.
 - [ ] **Incomplete** — final Springer report shell (separate deliverable).

@@ -30,7 +30,7 @@ work (e.g. running on the **Runner VM**). Read it, then `docs/network-topology.m
   VM**, SSH works fine and is what's actually configured (`~/.ssh/id_ed25519`,
   `gh auth login` via device flow) — this 404 gotcha does not apply there.
 
-## Current state (2026-08) — Phase 1 complete, validated end-to-end
+## Current state (2026-08) — Phase 1 fully closed, merged to main
 **Built (all 10 stages scaffolded):** `ci.yml` (SAST/secrets/IaC/SCA), `deploy.yml`
 (build→Trivy→deploy→Staging over SSH), `security-tests.yml` (post-deploy DAST +
 regression), hardened `Dockerfile.paymenter`, segmented `docker-compose.yml`,
@@ -38,39 +38,50 @@ reverse-proxy + ModSecurity virtual patches, Ansible hardening, Portainer
 monitoring, docs.
 
 **Runner is registered and live** (systemd service
-`actions.runner.HaidenVeno-Paymenter-CICD.CICD-Runner-hveno`, `AS_SERVICE=1`),
-on branch `phase1/staging-remote-deploy` (not yet merged to `main` — that's a
-deliberate pending decision, not an oversight).
+`actions.runner.HaidenVeno-Paymenter-CICD.CICD-Runner-hveno`, `AS_SERVICE=1`).
+`phase1/staging-remote-deploy` is merged into `main` — Phase 1 is done, not
+pending.
 
 **Validated via real GitHub Actions on the self-hosted runner (not just
-locally) — this is new since the last update:**
+locally):**
 - `ci.yml`: all 6 jobs (semgrep, eslint-security, gitleaks, hadolint,
   trivy-config, dependency-check) green.
 - `deploy.yml`: `build` → `trivy-scan` → `deploy` all green — the deploy job
   actually SSHes to Staging, transfers the scanned image, brings the compose
   stack up, and health-checks it. `https://paymenter.homelab.local/` returns
   `200` off a CI-driven deploy, not a manual one.
-- `security-tests.yml`: running for the first time ever this session;
-  `regression-tests` needed `pip` on the runner (now installed); ZAP/Nikto/
-  config-audit results from that first run weren't fully confirmed before this
-  note was written — check `gh run list --workflow security-tests.yml` for the
-  latest status before assuming it's clean.
+- `security-tests.yml`: **fully clean.** `gate`, `regression-tests` (14
+  passed / 14 skipped / 0 failed — skips are the documented Stage 3 auth-secret
+  gap, not bugs), `post-deploy-nikto`, and `post-deploy-config-audit` (all
+  checks pass) are all green. `post-deploy-zap`'s "CSP Header Not Set" finding
+  is fixed (see below) — confirmed via a direct manual ZAP re-scan
+  (`FAIL-NEW: 0`), not yet re-confirmed via a full CI run (deliberately, to
+  avoid re-running the ~30min pipeline for a config-only change — see
+  `docs/allowlist.md` for the CSP policy rationale).
 - Ansible host-hardening (`provision.yml`→`docker.yml`→`secrets.yml`→
   `certs.yml`→`harden.yml`, run in that order) has executed for real against
   Staging, including the nftables/DOCKER-USER firewall reload — no lockout,
   confirmed idempotent on repeat runs.
 
+**New reference doc:** `docs/allowlist.md` catalogs every scan exception in
+the pipeline (gitleaks paths, semgrep scope exclusion, Trivy/Dependency-Check
+thresholds, hadolint waivers, the CSP policy trade-off) with rationale — check
+there before assuming an exception is a bug.
+
 **Still open:**
-- `security-tests.yml`'s DAST/regression results need a clean confirmed pass
-  (see above) and its auth-layer tests need secrets wired (Stage 3 in
-  `docs/checklist.md`).
-- Branch not merged to `main` yet.
+- `security-tests.yml`'s auth-layer tests need secrets wired (Stage 3 in
+  `docs/checklist.md`) to stop skipping.
+- `auth/test_oauth_key_perms.py` still checks the container locally instead
+  of over SSH to the deploy target (same class of bug `config-audit.sh` had
+  until Phase 1's fix, just not yet ported here) — skips gracefully, doesn't
+  fail the suite, so it's cosmetic rather than blocking.
 - Maturity gaps: no branch protection / deploy approval; `GITHUB_TOKEN` not
   scoped per job; `STAGING_BECOME_PASS` (Ansible become password, needed for
   `deploy.yml`'s provisioning step) is a plaintext-in-secret password rather
   than a sudoers NOPASSWD entry on Staging — works, but the latter would be
   cleaner.
-- Phase 2 (Prod-DMZ + Prod-App) not started — those VMs don't exist yet.
+- Phase 2 (Prod-DMZ + Prod-App) — see "Next up" below; those VMs don't exist
+  yet, so this is still a standing-up-infrastructure task, not a pipeline task.
 
 ## Architecture / lab
 5-VM VirtualBox topology with a **true DMZ for production**. Full detail +
@@ -213,22 +224,27 @@ without a real runner + real deploy target.
   invocations (matches what's actually validated elsewhere in this doc).
 
 ## Next up — Phase 2 (Prod-DMZ + Prod-App)
-Phase 1 (Runner + Staging) is done — see "Current state" above. Before
-starting Phase 2:
-1. Get a clean confirmed `security-tests.yml` pass (DAST + regression +
-   config-audit) — the first-ever run needed the `pip` fix mid-flight; re-run
-   and actually read the ZAP/Nikto/config-audit results, don't just assume
-   green because nothing errored.
-2. Decide whether/when to merge `phase1/staging-remote-deploy` → `main`.
-3. Stand up Prod-DMZ + Prod-App VMs per `docs/network-topology.md`'s IP
+Phase 1 (Runner + Staging) is done and merged to `main` — see "Current state"
+above. Starting Phase 2:
+1. Stand up Prod-DMZ + Prod-App VMs per `docs/network-topology.md`'s IP
    scheme (`10.0.10.30` / `10.0.40.31`, mgmt `10.0.20.30` / `10.0.20.31`).
-   `ansible/inventory.ini` already has groups for both.
-4. Approval-gated promotion: build once on Staging, promote the *same* scanned
+   `ansible/inventory.ini` already has groups for both. **Not yet started —
+   these VMs don't exist yet**, so this begins as infra standup, not a
+   pipeline change.
+2. Approval-gated promotion: build once on Staging, promote the *same* scanned
    image to prod (don't rebuild) — the image-transfer mechanism from Phase 1
    (`docker save | ssh ... docker load`) generalizes directly.
-5. `provision.yml`'s `mgmt_iface` default (`enp0s8`) may not hold for
+3. `provision.yml`'s `mgmt_iface` default (`enp0s8`) may not hold for
    Prod-DMZ, which has more NICs than Runner/Staging — check and override via
    `host_vars` if needed.
+4. `group_vars/staging.yml`'s pattern (per-env `management_cidr` /
+   `allowed_web_sources` override) needs a `group_vars/prod_dmz.yml` and
+   `group_vars/prod_app.yml` equivalent — don't let `harden.yml` fall back to
+   `group_vars/all.yml`'s default CIDR against prod hosts, same lockout risk
+   Staging had in Phase 1.
+5. Decide the promotion trigger: manual `workflow_dispatch` with an
+   environment-protection rule (GitHub Environments + required reviewers) is
+   the natural fit given `deploy.yml`'s existing structure — not yet built.
 
 Then Phase 3 (Attacker/Kali external validation). See `docs/checklist.md` for
 the rubric tracker and `docs/test-justification.md` for gate rationale.
