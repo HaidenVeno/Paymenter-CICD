@@ -1,7 +1,10 @@
 # Top-level playbook run by deploy.yml before `docker compose up`.
-# Order matters: secrets/certs must exist before the stack starts, and host
-# hardening should be in place before ports are published.
+# Order matters: the host must be reachable/provisioned and have Docker before
+# anything else; secrets/certs must exist before the stack starts; host
+# hardening (firewall) goes last so it doesn't lock out earlier steps.
 ---
-- import_playbook: harden.yml
+- import_playbook: provision.yml
+- import_playbook: docker.yml
 - import_playbook: secrets.yml
 - import_playbook: certs.yml
+- import_playbook: harden.yml

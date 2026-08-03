@@ -12,10 +12,18 @@
     use_certbot: false
 
   tasks:
+    # Owned by root, not the deploy user: the reverse-proxy container runs
+    # with cap_drop: [ALL] (docker-compose.yml), which strips root's
+    # DAC_OVERRIDE — even as UID 0 it can't read past a directory/file it
+    # doesn't own. Declaring owner explicitly (rather than relying on
+    # whichever user happened to create it) makes this self-healing on
+    # re-run instead of silently drifting.
     - name: Ensure certs directory exists (private)
       ansible.builtin.file:
         path: "{{ certs_dir }}"
         state: directory
+        owner: root
+        group: root
         mode: "0700"
 
     - name: Generate self-signed certificate if absent
@@ -33,6 +41,8 @@
     - name: Set certificate permissions
       ansible.builtin.file:
         path: "{{ item.path }}"
+        owner: root
+        group: root
         mode: "{{ item.mode }}"
       loop:
         - { path: "{{ certs_dir }}/privkey.pem", mode: "0600" }

@@ -12,4 +12,10 @@ paths = [
   '''(^|/)vendor/''',
   '''(^|/)node_modules/''',
   '''\.env\.example$''',
+  # Synthetic reCAPTCHA site/secret key pair used only to exercise the
+  # captcha-enabled login path in tests — not a real registered credential,
+  # and reCAPTCHA site keys are public-by-design anyway (embedded in
+  # front-end HTML). Scoped to this one file, not all of tests/, so a real
+  # secret accidentally committed elsewhere in tests still gets caught.
+  '''app/tests/Feature/Auth/LoginTest\.php$''',
 ]

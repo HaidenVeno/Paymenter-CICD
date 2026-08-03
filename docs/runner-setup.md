@@ -13,7 +13,19 @@ re-run to start it anytime:
 ```bash
 REPO=<owner>/<repo> ./scripts/runner-up.sh            # if gh is installed+auth'd
 REPO=<owner>/<repo> RUNNER_TOKEN=<token> ./scripts/runner-up.sh   # else paste a token
+REPO=<owner>/<repo> AS_SERVICE=1 ./scripts/runner-up.sh  # + survives reboot (systemd)
 ```
+
+`gh auth login` (no browser on a headless VM) uses the device-code flow:
+`gh` prints a one-time code and a URL — open the URL on any device, enter the
+code, done. `./scripts/runner-up.sh` itself needs `chmod +x` if cloned fresh
+(it wasn't committed with the executable bit, a real bug caught running this
+in Phase 1).
+
+**Note:** `./scripts/runner-up.sh` needs to be run *manually* (not
+autonomously) since it requires either `gh auth login`'s interactive
+device-code approval or a token pasted from the GitHub UI — a Claude Code
+instance can drive the rest of setup but can't complete this step alone.
 
 Both machines can stay registered; a job runs on whichever runner is online. If
 both are up, steer specific jobs with labels — e.g. register the homelab with
@@ -57,25 +69,49 @@ affects your segmentation diagram):
 
 ## 2. Host prerequisites
 
-The workflows assume these are on the runner host (installed once, not per-job):
+The workflows assume these are on the runner host (installed once, not per-job).
+Use Docker's **official apt repo**, not Ubuntu's `docker.io` package (older,
+diverges from what's validated here):
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y docker.io docker-compose-plugin python3-pip ansible nikto
+# Docker CE via the official repo (see docker.com/engine/install/ubuntu for the
+# keyring/repo setup) — NOT `apt-get install docker.io`
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
+  docker-buildx-plugin docker-compose-plugin
+sudo apt-get install -y ansible python3-pip nikto gh
+ansible-galaxy collection install ansible.posix   # harden.yml needs this
 sudo usermod -aG docker "$(whoami)"   # let the runner user drive Docker
-# log out/in (or restart the runner service) for the group change to apply
+# Group membership only applies to NEW sessions (fresh SSH connections, the
+# runner service's own process) — a shell open from before this command won't
+# see it. Use `sg docker -c "..."` there instead of logging out/in mid-session.
 ```
 
-Ansible plays use `become` (sudo). Give the runner user passwordless sudo, or
-run the deploy with an ask-become-pass alternative:
+`python3-pip` matters even though `python3` ships by default — `pip`/`pip3`
+don't, and `security-tests.yml`'s `regression-tests` job needs them.
 
-```bash
-echo "$(whoami) ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/gh-runner
-```
+**Two separate sudo needs, don't conflate them:**
+1. **The runner's own local sudo** — used by `.github/actions/reclaim-workspace`
+   to `chown` the shared `_work` directory back after Docker-based actions
+   leave root-owned files in it (self-hosted runners reuse `_work` across every
+   job, unlike GitHub-hosted ephemeral runners). Scope this narrowly, not
+   blanket `NOPASSWD:ALL`:
+   ```bash
+   printf 'hveno ALL=(root) NOPASSWD: /usr/bin/chown\n' | sudo tee /etc/sudoers.d/hveno-ci-chown
+   sudo chmod 440 /etc/sudoers.d/hveno-ci-chown
+   ```
+2. **Ansible `become` on deploy targets** (Staging/Prod, via SSH) — `deploy.yml`
+   passes this as `-e ansible_become_pass="${{ secrets.STAGING_BECOME_PASS }}"`,
+   a GitHub Actions secret, not passwordless sudo on the target. Simpler to set
+   up than sudoers-per-target, but means the become password lives in a GitHub
+   secret; a NOPASSWD sudoers entry on each deploy target would be the cleaner
+   long-term alternative if you revisit this.
 
 ## 3. Secrets & variables (Settings → Secrets and variables → Actions)
 
 **Secrets** (sensitive):
+- `STAGING_BECOME_PASS` — **required for `deploy.yml`**; the Ansible `become`
+  (sudo) password used when provisioning the deploy target over SSH. Without
+  it, `deploy.yml`'s Ansible step fails.
 - `DISCORD_WEBHOOK_URL` — notifications (Stage 4)
 - `NVD_API_KEY` — faster Dependency-Check feed updates (optional)
 - `ADMIN_API_TOKEN`, `LOWPRIV_API_TOKEN`, `CUSTOMER_COOKIE`, `REMEMBER_COOKIE`,

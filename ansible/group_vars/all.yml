@@ -1,0 +1,9 @@
+# Generic fallbacks for harden.yml, used when a host's group_vars doesn't
+# override them. Per-env overrides live in group_vars/<group>.yml (e.g.
+# group_vars/staging.yml) — those take precedence over this file.
+---
+# Sources allowed to reach the published web ports (80/443). Default open;
+# tighten to your LAN/management CIDR for a real deployment.
+allowed_web_sources: "0.0.0.0/0"
+# Source(s) allowed to SSH in. Tighten this per environment.
+management_cidr: "192.168.0.0/24"

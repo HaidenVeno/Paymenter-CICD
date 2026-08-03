@@ -1,0 +1,102 @@
+# Base host bootstrap — captures what was previously done by hand: the deploy
+# user, persistent mgmt networking, sshd, and lab-wide name resolution. Runs
+# before docker.yml/secrets.yml/certs.yml/harden.yml in site.yml.
+#
+# Scope defaults to `deploy_target` behavior (staging only) so a normal CI
+# deploy run doesn't re-touch the Runner's own networking every time. Pass
+# -e provision_target=lab to provision the whole lab (Runner + all targets)
+# in one run, or -e provision_target=runner for just the Runner.
+---
+- name: Base host provisioning
+  hosts: "{{ provision_target | default('staging') }}"
+  become: true
+  vars:
+    # Matches secrets.yml/certs.yml's repo_root so the directory they
+    # auto-create parents for (owned by root, since those tasks run via
+    # become with no owner: set) is already deploy-user-owned by the time
+    # they run. Without this, a fresh box's first site.yml run recreates
+    # ~/Paymenter-CICD/docker as root:root, and deploy.yml's rsync step
+    # (running as the plain deploy user, no become) fails with permission
+    # denied.
+    repo_root: "{{ playbook_dir }}/../.."
+    # Overridable per-host via group_vars/host_vars (e.g. Prod-DMZ has extra
+    # NICs and may not use enp0s8 for mgmt).
+    mgmt_iface: enp0s8
+    lab_hosts:
+      - { name: runner, ip: 10.0.20.10 }
+      - { name: staging, ip: 10.0.20.20 }
+      - { name: prod-dmz, ip: 10.0.20.30 }
+      - { name: prod-app, ip: 10.0.20.31 }
+    # Staging today; repoint at Prod-DMZ's public IP when Phase 2 promotes.
+    paymenter_hostname: paymenter.homelab.local
+    paymenter_ip: 10.0.20.20
+
+  tasks:
+    - name: Ensure deploy user exists with sudo
+      ansible.builtin.user:
+        name: "{{ ansible_user }}"
+        groups: sudo
+        append: true
+        shell: /bin/bash
+        state: present
+
+    - name: Enable and start sshd
+      ansible.builtin.systemd:
+        name: ssh
+        enabled: true
+        state: started
+
+    # secrets.yml/certs.yml create docker/secrets/* under this same repo_root
+    # via become (root, no owner: set) — only the leaf paths they manage stay
+    # root-owned on purpose. This just makes sure the tree they hang off of is
+    # writable by the deploy user for deploy.yml's rsync step.
+    - name: Ensure deploy directory tree exists, owned by the deploy user
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0750"
+      loop:
+        - "{{ repo_root }}"
+        - "{{ repo_root }}/docker"
+
+    # The mgmt IP was previously applied out-of-band (ad-hoc `ip addr`/`nmcli`,
+    # no boot-time persistence) — a reboot loses it and strands the box off
+    # mgmtnet. Netplan is authoritative here regardless of backend (systemd-
+    # networkd or NetworkManager); it renders to whichever renderer the host
+    # already uses.
+    - name: Write persistent netplan for the mgmt interface
+      ansible.builtin.copy:
+        dest: /etc/netplan/90-mgmt.yaml
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          network:
+            version: 2
+            ethernets:
+              {{ mgmt_iface }}:
+                dhcp4: false
+                addresses:
+                  - {{ ansible_host }}/24
+      register: mgmt_netplan
+
+    - name: Validate netplan config (generate only, no activation)
+      ansible.builtin.command: netplan generate
+      when: mgmt_netplan.changed
+      changed_when: false
+
+    - name: Apply netplan (mgmt interface persistence)
+      ansible.builtin.command: netplan apply
+      when: mgmt_netplan.changed
+
+    - name: Static /etc/hosts for lab name resolution
+      ansible.builtin.blockinfile:
+        path: /etc/hosts
+        marker: "# {mark} ANSIBLE MANAGED — paymenter-cicd lab hosts"
+        block: |
+          {% for h in lab_hosts %}
+          {{ h.ip }} {{ h.name }}
+          {% endfor %}
+          {{ paymenter_ip }} {{ paymenter_hostname }}

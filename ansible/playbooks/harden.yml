@@ -5,12 +5,15 @@
   hosts: "{{ deploy_target | default('staging') }}"
   become: true
   vars:
-    # Sources allowed to reach the published web ports (80/443). Default open;
-    # tighten to your LAN/management CIDR for a real deployment.
-    allowed_web_sources: "0.0.0.0/0"
-    # Source(s) allowed to SSH in. Tighten this.
-    management_cidr: "192.168.0.0/24"
     ssh_port: 22
+    # allowed_web_sources / management_cidr: generic fallback lives in
+    # group_vars/all.yml, per-env overrides in group_vars/<group>.yml. NOT
+    # hardcoded here on purpose — play-level vars: outrank group_vars in
+    # Ansible's precedence order, so defining them here would silently defeat
+    # any group_vars override (found this the hard way: a --check --diff
+    # against staging rendered the 192.168.0.0/24 default even with
+    # group_vars/staging.yml in place, which would have nftables-locked the
+    # Runner out of SSH the moment this play went live).
 
   handlers:
     - name: reload nftables

@@ -2,8 +2,15 @@
 # Managed by Ansible (harden.yml). Host-facing traffic only — container
 # published-port filtering is handled separately in the DOCKER-USER chain
 # (paymenter-fw.sh), because Docker bypasses this INPUT chain for those.
+#
+# Scoped flush (table, not ruleset): Docker manages its own nftables tables
+# (DOCKER-USER et al) in the same global ruleset. `flush ruleset` here would
+# nuke those too — with no ordering guarantee between nftables.service and
+# docker.service, that can happen on every boot, not just a manual reload.
+# `add table` + `flush table` only touches the table this file owns.
 
-flush ruleset
+add table inet filter
+flush table inet filter
 
 table inet filter {
     chain input {

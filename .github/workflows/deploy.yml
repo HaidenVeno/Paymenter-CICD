@@ -8,6 +8,15 @@ on:
 env:
   APP_REPO: ${{ vars.APP_REPO || 'HaidenVeno/Paymenter' }}
   APP_REF:  ${{ vars.APP_REF  || 'fix/upgrade-configoptions-injection' }}
+  DEPLOY_HOST: ${{ vars.DEPLOY_HOST || '10.0.20.20' }}
+  DEPLOY_USER: ${{ vars.DEPLOY_USER || 'hveno' }}
+  DEPLOY_SSH_KEY: ${{ vars.DEPLOY_SSH_KEY || '/home/hveno/.ssh/id_ed25519_deploy' }}
+  # Absolute, not ~-relative: ~ only expands when a shell parses the literal
+  # token itself, and this value passes through quoted variable references
+  # (remote `bash -s`, `cd "$DEPLOY_PATH"`) where that never happens. Also
+  # matches what secrets.yml/certs.yml/provision.yml already resolve
+  # {{ playbook_dir }}/../.. to on the deploy target.
+  DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/home/hveno/Paymenter-CICD/docker' }}
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -30,6 +39,9 @@ jobs:
             -t paymenter:local \
             .
 
+      - if: always()
+        uses: ./.github/actions/reclaim-workspace
+
   # ---------------------------------------------------------------------------
   # Image vulnerability scan. Report HIGH+CRITICAL as an artifact, then gate:
   # fail the pipeline on unfixed CRITICALs (documented threshold — see
@@ -39,8 +51,10 @@ jobs:
     needs: build
     runs-on: self-hosted
     steps:
+      - uses: actions/checkout@v4
+
       - name: Trivy scan (report HIGH,CRITICAL)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: 'paymenter:${{ github.sha }}'
           severity: 'HIGH,CRITICAL'
@@ -57,7 +71,7 @@ jobs:
           path: trivy-results.sarif
 
       - name: Gate on CRITICAL
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: 'paymenter:${{ github.sha }}'
           severity: 'CRITICAL'
@@ -65,9 +79,14 @@ jobs:
           format: 'table'
           exit-code: '1'
 
+      - if: always()
+        uses: ./.github/actions/reclaim-workspace
+
   # ---------------------------------------------------------------------------
-  # Provision host hardening + secrets/certs (Ansible), then deploy the
-  # already-built, already-scanned image via compose (--no-build).
+  # Provision host (Ansible: user/network/Docker/secrets/certs/firewall) on
+  # the deploy target, ship the already-built already-scanned image + compose
+  # context to it over the mgmt network, and bring the stack up there. The
+  # runner is never the deploy target — see docs/network-topology.md.
   # ---------------------------------------------------------------------------
   deploy:
     needs: trivy-scan
@@ -75,22 +94,48 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Harden host + provision secrets/certs (Ansible)
-        run: ansible-playbook ansible/playbooks/site.yml
+      - name: "Provision target (Ansible: user/net/Docker/secrets/certs/firewall)"
+        run: |
+          ansible-playbook -i ansible/inventory.ini ansible/playbooks/site.yml \
+            -e ansible_become_pass="${{ secrets.STAGING_BECOME_PASS }}"
+
+      - name: Sync compose context to deploy target
+        run: |
+          rsync -az --delete --exclude secrets \
+            -e "ssh -o StrictHostKeyChecking=accept-new -i $DEPLOY_SSH_KEY" \
+            docker/ "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/"
+
+      - name: Ship the scanned image to the deploy target
+        run: |
+          docker save "paymenter:${{ github.sha }}" paymenter:local | gzip \
+            | ssh -o StrictHostKeyChecking=accept-new -i "$DEPLOY_SSH_KEY" \
+                "$DEPLOY_USER@$DEPLOY_HOST" "gunzip | docker load"
 
       - name: Deploy (scanned image, no rebuild)
-        working-directory: docker
-        run: docker compose up -d --no-build --remove-orphans
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new -i "$DEPLOY_SSH_KEY" \
+            "$DEPLOY_USER@$DEPLOY_HOST" "DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE'
+          cd "$DEPLOY_PATH"
+          docker compose up -d --no-build --remove-orphans
+          REMOTE
 
       - name: Wait for app health
         run: |
+          ssh -o StrictHostKeyChecking=accept-new -i "$DEPLOY_SSH_KEY" \
+            "$DEPLOY_USER@$DEPLOY_HOST" "DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE'
           for i in $(seq 1 30); do
-            if [ "$(docker inspect -f '{{.State.Health.Status}}' $(docker compose -f docker/docker-compose.yml ps -q paymenter) 2>/dev/null)" = "healthy" ]; then
+            cid="$(docker compose -f "$DEPLOY_PATH/docker-compose.yml" ps -q paymenter)"
+            status="$(docker inspect -f '{{.State.Health.Status}}' "$cid" 2>/dev/null)"
+            if [ "$status" = "healthy" ]; then
               echo "paymenter healthy"; exit 0
             fi
             echo "waiting for health ($i/30)..."; sleep 5
           done
           echo "app did not become healthy in time"; exit 1
+          REMOTE
+
+      - if: always()
+        uses: ./.github/actions/reclaim-workspace
 
   notify:
     needs: [build, trivy-scan, deploy]
@@ -100,11 +145,18 @@ jobs:
       issues: write
     steps:
       - name: Post to Discord
-        if: ${{ secrets.DISCORD_WEBHOOK_URL != '' }}
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
+          # secrets context isn't allowed in step-level `if:` (actionlint
+          # caught this — it was silently failing every workflow's parse,
+          # zero jobs created, no runner had ever executed these before).
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "No DISCORD_WEBHOOK_URL set, skipping."; exit 0
+          fi
           curl -H "Content-Type: application/json" -X POST \
             -d "{\"content\": \"Build/Scan/Deploy failed on ${{ github.repository }} — run ${{ github.run_id }}: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
-            "${{ secrets.DISCORD_WEBHOOK_URL }}"
+            "$DISCORD_WEBHOOK_URL"
 
       - name: Open GitHub Issue
         uses: actions/github-script@v7
