@@ -88,6 +88,14 @@ jobs:
           rules_file_name: 'security/zap/rules.tsv'
           fail_action: true
           allow_issue_writing: false
+          # Without -I, zap-baseline.py exits non-zero on ANY alert, WARN
+          # included — fail_action then fails the job even when rules.tsv's
+          # own severity classification says WARN-level findings shouldn't
+          # gate. -I makes the script's exit code (and thus fail_action)
+          # respect that distinction: only a real FAIL-level alert fails the
+          # job. Found this when the CSP fix (FAIL-NEW: 0) still failed the
+          # job on 7 pre-existing, already-documented WARN findings.
+          cmd_options: '-I'
       - if: always()
         uses: ./.github/actions/reclaim-workspace
 

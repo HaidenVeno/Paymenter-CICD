@@ -179,9 +179,17 @@ decision — check `CLAUDE.md`'s gotchas section first.
 
 - **ZAP WARN-level findings** (`Cookie No HttpOnly Flag`, `X-Powered-By`
   header leak, `Cross-Origin-Embedder-Policy` missing, CSP directives
-  without a fallback) — surfaced by the same re-scan that validated the CSP
-  fix. Not gated on (ZAP baseline only fails on FAIL-level by default), but
-  real and worth a future pass.
+  without a fallback, `Non-Storable Content`, `Session Management Response
+  Identified`, `Re-examine Cache-control Directives`) — surfaced by the same
+  re-scan that validated the CSP fix. **Correction**: this was originally
+  assumed to be non-gating ("ZAP baseline only fails on FAIL-level by
+  default"), but that assumption was wrong — `zaproxy/action-baseline`
+  without `-I` fails the job on *any* alert regardless of `rules.tsv`'s own
+  WARN/FAIL classification, which the first real automated
+  `security-tests.yml` run surfaced (job failed with `FAIL-NEW: 0, WARN-NEW:
+  7`). Fixed by adding `cmd_options: '-I'` to the ZAP step. These findings
+  are real and worth a future pass, but are now actually non-gating as
+  intended.
 - **`security/tests/auth/test_oauth_key_perms.py`** skips with "paymenter
   container not found / docker unavailable" — same runner-vs-deploy-target
   assumption `config-audit.sh` had until Phase 1's fix, just not yet ported
