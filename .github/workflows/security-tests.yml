@@ -11,6 +11,12 @@ on:
 env:
   BASE_URL: ${{ vars.BASE_URL || 'https://paymenter.homelab.local' }}
   VERIFY_TLS: ${{ vars.VERIFY_TLS || 'false' }}
+  # Same deploy-target convention as deploy.yml — config-audit checks the
+  # actual deploy target (Staging) over SSH, not the runner it executes on.
+  DEPLOY_HOST: ${{ vars.DEPLOY_HOST || '10.0.20.20' }}
+  DEPLOY_USER: ${{ vars.DEPLOY_USER || 'hveno' }}
+  DEPLOY_SSH_KEY: ${{ vars.DEPLOY_SSH_KEY || '/home/hveno/.ssh/id_ed25519_deploy' }}
+  DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/home/hveno/Paymenter-CICD/docker' }}
 
 jobs:
   gate:
@@ -113,6 +119,10 @@ jobs:
       - name: Assert hardening still holds
         env:
           BASE_URL: ${{ env.BASE_URL }}
+          DEPLOY_HOST: ${{ env.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ env.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ env.DEPLOY_SSH_KEY }}
+          DEPLOY_PATH: ${{ env.DEPLOY_PATH }}
         run: bash security/tests/config-audit.sh
       - if: always()
         uses: ./.github/actions/reclaim-workspace
