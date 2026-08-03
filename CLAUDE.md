@@ -285,11 +285,16 @@ for the full design.
   package pre-installed on Prod-DMZ that was silently bound to port 80,
   conflicting with the `reverse-proxy` container's own port binding.
 
-Compose split is committed on `phase2/dmz-app-split` (PR #9, not yet merged).
+Compose split merged to `main` via PR #9.
 
 ## Approval-gated production promotion (local registry + `promote-prod.yml`)
-Built on branch `phase2/registry-promotion` (stacked on `phase2/dmz-app-split`
-— it depends on `docker-compose.app.yml`/`docker-compose.dmz.yml` existing).
+Merged to `main` via PR #10. **Validated end-to-end for real**: dispatched
+`promote-prod.yml`, confirmed the `production` Environment genuinely paused
+the run (`status: waiting`, zero steps executed — not a silent pass-through),
+approved it, and confirmed the digest running in `docker-paymenter-1` on
+Prod-App matches exactly what was pushed to the registry, with a `200` from
+`https://paymenter.homelab.local/` through Prod-DMZ afterward. Evidence in
+`evidence/phase2-promotion/promote-prod-e2e.txt`.
 
 - **Local registry** (`docker/docker-compose.registry.yml`): `registry:2` on
   the Runner, port bound to the Runner's mgmt IP specifically
@@ -305,8 +310,13 @@ Built on branch `phase2/registry-promotion` (stacked on `phase2/dmz-app-split`
 - **`deploy.yml`** now pushes the Trivy-scanned, health-checked image to the
   registry (by digest, after the existing health-check step — never a
   built-but-unvalidated image) and records it as the repo variable
-  `STAGING_VALIDATED_DIGEST` via `gh variable set` (needs `permissions:
-  actions: write` on that job).
+  `STAGING_VALIDATED_DIGEST` via `gh variable set`. **Gotcha**: `GITHUB_TOKEN`
+  cannot manage repo Actions variables under any `permissions:` grant —
+  that needs repo-admin scope, which isn't a grantable scope for the
+  ephemeral token at all (confirmed via a real run: push succeeded, then
+  `403: Resource not accessible by integration`). Fixed by *not* setting
+  `GH_TOKEN` in that step, so `gh` falls back to the Runner's own persistent
+  `gh auth login` session instead.
 - **New workflow `promote-prod.yml`**: `workflow_dispatch`-only (optional
   `digest` input, defaults to `STAGING_VALIDATED_DIGEST`), gated by
   `environment: production`. Pulls that exact digest onto Prod-App, brings up
@@ -324,15 +334,39 @@ Built on branch `phase2/registry-promotion` (stacked on `phase2/dmz-app-split`
   docker load`) — the registry only needed to hold a copy for later
   promotion, not replace how Staging gets its image.
 
+**Other gotchas found validating this against real infrastructure:**
+- `workflow_dispatch` workflows must exist on the **default branch** to be
+  dispatchable at all — `--ref` only selects which commit's version runs, it
+  doesn't make an unmerged branch's workflow visible to the API (`404:
+  workflow not found on the default branch`). Same root cause as the
+  Phase 1 `workflow_run`-only-reads-default-branch gotcha, different symptom.
+  Both PRs (#9, #10) had to be merged before `promote-prod.yml` could be
+  tested at all.
+- `gh run rerun <id> --failed` re-executes using that run's *original*
+  workflow-file snapshot, not the current default-branch version — spent a
+  cycle confused why a `security-tests.yml` fix "didn't apply" on rerun. To
+  actually test a workflow-file change, trigger a fresh run (`workflow_dispatch`
+  or a new `workflow_run`-triggering event), not a rerun of an old one.
+- **ZAP baseline job was failing the pipeline on WARN-level findings, not just
+  FAIL-level** — `zaproxy/action-baseline` without `cmd_options: '-I'` fails
+  on *any* alert regardless of `rules.tsv`'s own severity classification.
+  `docs/allowlist.md`'s claim that "ZAP baseline only fails on FAIL-level by
+  default" was wrong until this fix landed; corrected there too. 7 WARN
+  findings remain (X-Powered-By leak, XSRF-TOKEN HttpOnly, CSP no-fallback
+  directive, COEP/COOP/CORP, informational cache/session ones) — reviewed but
+  deliberately not fixed yet, tracked as explicit follow-up (some are real
+  fixes like the X-Powered-By leak; some, like disabling XSRF-TOKEN's
+  HttpOnly, would break CSRF protection and shouldn't be "fixed" at all).
+
 **Not yet done:**
-- End-to-end test of `promote-prod.yml` itself (trigger it, confirm the
-  review-gate actually pauses the run, approve, confirm Prod-App+Prod-DMZ
-  serve the promoted digest) — next immediate step.
+- Fix the 7 open ZAP WARN findings reviewed above (X-Powered-By header removal
+  is the clear cheap win; XSRF-TOKEN HttpOnly should be reclassified as
+  accepted, not fixed; COEP/COOP/CORP deliberately deferred — enabling COEP
+  carelessly risks breaking real payment-gateway iframe/widget integrations).
 - Repointing `provision.yml`'s `paymenter_hostname`/`paymenter_ip` defaults
   (currently Staging's) at Prod-DMZ's public identity — a deliberate one-time
   cutover decision, waits until Phase 3 proves segmentation (explicit
   instruction: Phase 3 before any hostname cutover).
-- None of the registry/promotion work is committed yet.
 
 Then Phase 3 (Attacker/Kali external validation) — needs its own VM stand-up
 (same as Prod-DMZ/Prod-App did), not yet started. See `docs/checklist.md` for

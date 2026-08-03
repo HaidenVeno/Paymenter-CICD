@@ -1,0 +1,12 @@
+Verification: promote-prod.yml (run 30855196482) end-to-end.
+
+- Required-reviewer Environment gate genuinely paused the run (status:
+  "waiting", zero steps executed) until approved in the GitHub UI.
+- All steps completed successfully after approval: resolve digest -> sync
+  to Prod-App -> pull by digest -> bring up app tier -> health check ->
+  sync to Prod-DMZ -> bring up DMZ tier -> end-to-end curl through the DMZ.
+--- end-to-end curl through Prod-DMZ ---
+HTTP 200
+--- digest running on Prod-App vs. what was promoted ---
+Running:  sha256:411580b5c82e47622faaa2db16a14d2d761f77eaa3a12500a43f8ed2040cd393
+Promoted: sha256:411580b5c82e47622faaa2db16a14d2d761f77eaa3a12500a43f8ed2040cd393
