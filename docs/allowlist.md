@@ -177,6 +177,11 @@ decision — check `CLAUDE.md`'s gotchas section first.
 
 ## Not yet resolved (tracked, not silently accepted)
 
+**Confirmed via a real automated `security-tests.yml` run** (not just local
+validation): `FAIL-NEW: 0, WARN-NEW: 5, IGNORE: 1, PASS: 61` — `X-Powered-By`
+now passes outright, the `XSRF-TOKEN` HttpOnly finding is correctly counted
+under `IGNORE` instead of `WARN`, and the job passes end to end.
+
 - **ZAP baseline was failing the pipeline on WARN-level findings, not just
   FAIL-level** — `zaproxy/action-baseline` without `-I` fails the job on
   *any* alert regardless of `rules.tsv`'s own WARN/FAIL classification. The

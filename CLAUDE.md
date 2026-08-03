@@ -358,11 +358,17 @@ Prod-App matches exactly what was pushed to the registry, with a `200` from
   fixes like the X-Powered-By leak; some, like disabling XSRF-TOKEN's
   HttpOnly, would break CSRF protection and shouldn't be "fixed" at all).
 
+**Phase 2 is now fully closed.** X-Powered-By fixed (`proxy_hide_header` in
+`proxy-params.conf`) and XSRF-TOKEN's HttpOnly finding reclassified `IGNORE`
+in `rules.tsv` — both confirmed via a real automated `security-tests.yml`
+run: `FAIL-NEW: 0, WARN-NEW: 5, IGNORE: 1, PASS: 61`, job green end to end.
+Remaining WARN findings (COEP/COOP/CORP, CSP no-fallback directive, and a
+few purely-informational ones) are deliberately deferred, not overlooked —
+see `docs/allowlist.md` for why each one specifically isn't worth fixing
+right now (COEP in particular risks breaking real payment-gateway
+iframe/widget integrations if enabled carelessly).
+
 **Not yet done:**
-- Fix the 7 open ZAP WARN findings reviewed above (X-Powered-By header removal
-  is the clear cheap win; XSRF-TOKEN HttpOnly should be reclassified as
-  accepted, not fixed; COEP/COOP/CORP deliberately deferred — enabling COEP
-  carelessly risks breaking real payment-gateway iframe/widget integrations).
 - Repointing `provision.yml`'s `paymenter_hostname`/`paymenter_ip` defaults
   (currently Staging's) at Prod-DMZ's public identity — a deliberate one-time
   cutover decision, waits until Phase 3 proves segmentation (explicit
