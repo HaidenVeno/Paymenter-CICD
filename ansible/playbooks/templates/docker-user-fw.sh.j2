@@ -4,14 +4,44 @@
 # point that it never programmatically modifies (Lab 5 s4.2/s4.4).
 #
 # Only additive `-I` inserts; never flush Docker-managed tables.
+#
+# `-d 172.16.0.0/12` (Docker's default bridge-network address pool) matters
+# on BOTH branches below: without it, "any forwarded packet to this port"
+# also matches a container's own OUTBOUND call to some OTHER host on the same
+# port — e.g. Prod-DMZ's reverse-proxy calling Prod-App's app-edge over
+# prodint (Phase 2), or paymenter itself calling out to a real payment
+# gateway's HTTPS API. By the time a packet reaches DOCKER-USER, Docker's own
+# DNAT for published ports has already rewritten the destination to the
+# container's bridge-internal IP, so restricting -d to that range scopes
+# these rules to "inbound to one of my published container ports" only — an
+# outbound call to a real external IP never matches. Found this the hard way:
+# the DMZ->App proxy hop timed out even though the app tier was healthy and a
+# host-level (non-container) curl to the same address worked fine —
+# DOCKER-USER's DROP was silently eating the container-originated packet
+# before it ever left the host.
+#
+# Idempotency: the delete commands below must match their corresponding
+# insert EXACTLY (protocol/port/comment included) — `iptables -D` requires an
+# exact rule-spec match, not a partial one. An earlier version of this script
+# tried to delete the DROP rule by comment alone (omitting -p/--dport), which
+# never actually matched anything; the DROP rule survived every re-run and
+# stacked up a stale duplicate each time. Fixed by matching the full spec.
 set -eu
 
-# Idempotency: delete our prior rules (ignore if absent) before re-inserting.
-while iptables -D DOCKER-USER -m comment --comment "paymenter-fw" -j DROP 2>/dev/null; do :; done
-while iptables -D DOCKER-USER -s {{ allowed_web_sources }} -p tcp -m multiport --dports 80,443 -m comment --comment "paymenter-fw" -j RETURN 2>/dev/null; do :; done
+{% if is_app_tier %}
+# App tier: only the DMZ proxy (over prodint) may reach the app port.
+while iptables -D DOCKER-USER -d 172.16.0.0/12 -p tcp --dport {{ app_port }} -m comment --comment "paymenter-fw" -j DROP 2>/dev/null; do :; done
+while iptables -D DOCKER-USER -s {{ app_upstream_cidr }} -d 172.16.0.0/12 -p tcp --dport {{ app_port }} -m comment --comment "paymenter-fw" -j RETURN 2>/dev/null; do :; done
+
+iptables -I DOCKER-USER 1 -s {{ app_upstream_cidr }} -d 172.16.0.0/12 -p tcp --dport {{ app_port }} -m comment --comment "paymenter-fw" -j RETURN
+iptables -I DOCKER-USER 2 -d 172.16.0.0/12 -p tcp --dport {{ app_port }} -m comment --comment "paymenter-fw" -j DROP
+{% else %}
+while iptables -D DOCKER-USER -d 172.16.0.0/12 -p tcp -m multiport --dports 80,443 -m comment --comment "paymenter-fw" -j DROP 2>/dev/null; do :; done
+while iptables -D DOCKER-USER -s {{ allowed_web_sources }} -d 172.16.0.0/12 -p tcp -m multiport --dports 80,443 -m comment --comment "paymenter-fw" -j RETURN 2>/dev/null; do :; done
 
 # Allow the permitted web sources to reach 80/443, drop everyone else that
 # reaches a published container port. Rules are evaluated top-down; RETURN
 # hands allowed traffic back to Docker's normal processing.
-iptables -I DOCKER-USER 1 -s {{ allowed_web_sources }} -p tcp -m multiport --dports 80,443 -m comment --comment "paymenter-fw" -j RETURN
-iptables -I DOCKER-USER 2 -p tcp -m multiport --dports 80,443 -m comment --comment "paymenter-fw" -j DROP
+iptables -I DOCKER-USER 1 -s {{ allowed_web_sources }} -d 172.16.0.0/12 -p tcp -m multiport --dports 80,443 -m comment --comment "paymenter-fw" -j RETURN
+iptables -I DOCKER-USER 2 -d 172.16.0.0/12 -p tcp -m multiport --dports 80,443 -m comment --comment "paymenter-fw" -j DROP
+{% endif %}

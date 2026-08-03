@@ -1,0 +1,9 @@
+# Prod-DMZ is the only public-facing box (reverse proxy + ModSecurity WAF) —
+# see docs/network-topology.md. management_cidr matches Staging's fix (the
+# 192.168.0.0/24 default would lock the Runner out the moment harden.yml
+# runs). allowed_web_sources is scoped to attacknet, not left at
+# group_vars/all.yml's 0.0.0.0/0 default — the lab's traffic policy is
+# default-deny, and only the Attacker/Ops VM (10.0.10.0/24) is meant to reach
+# this host's published ports; a real internet-facing deploy would widen this.
+management_cidr: "10.0.20.0/24"
+allowed_web_sources: "10.0.10.0/24"

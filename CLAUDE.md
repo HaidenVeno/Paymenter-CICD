@@ -223,28 +223,78 @@ without a real runner + real deploy target.
   runner provides that; switched to `docker run semgrep/semgrep` for all three
   invocations (matches what's actually validated elsewhere in this doc).
 
-## Next up — Phase 2 (Prod-DMZ + Prod-App)
-Phase 1 (Runner + Staging) is done and merged to `main` — see "Current state"
-above. Starting Phase 2:
-1. Stand up Prod-DMZ + Prod-App VMs per `docs/network-topology.md`'s IP
-   scheme (`10.0.10.30` / `10.0.40.31`, mgmt `10.0.20.30` / `10.0.20.31`).
-   `ansible/inventory.ini` already has groups for both. **Not yet started —
-   these VMs don't exist yet**, so this begins as infra standup, not a
-   pipeline change.
-2. Approval-gated promotion: build once on Staging, promote the *same* scanned
-   image to prod (don't rebuild) — the image-transfer mechanism from Phase 1
-   (`docker save | ssh ... docker load`) generalizes directly.
-3. `provision.yml`'s `mgmt_iface` default (`enp0s8`) may not hold for
-   Prod-DMZ, which has more NICs than Runner/Staging — check and override via
-   `host_vars` if needed.
-4. `group_vars/staging.yml`'s pattern (per-env `management_cidr` /
-   `allowed_web_sources` override) needs a `group_vars/prod_dmz.yml` and
-   `group_vars/prod_app.yml` equivalent — don't let `harden.yml` fall back to
-   `group_vars/all.yml`'s default CIDR against prod hosts, same lockout risk
-   Staging had in Phase 1.
-5. Decide the promotion trigger: manual `workflow_dispatch` with an
-   environment-protection rule (GitHub Environments + required reviewers) is
-   the natural fit given `deploy.yml`'s existing structure — not yet built.
+## Phase 2 (Prod-DMZ + Prod-App) — true DMZ split, manually validated end-to-end
+Prod-DMZ (`10.0.20.30` mgmt / `10.0.10.30` attacknet / `10.0.40.30` prodint,
+hostname `ips-waf-proxy`) and Prod-App (`10.0.20.31` mgmt / `10.0.40.31`
+prodint, hostname `Production-Server`) exist and are provisioned. **Not yet
+merged to a branch or wired into CI** — this was all done manually against
+real infrastructure, mirroring how Phase 1 validated Staging by hand before
+`deploy.yml`/CI existed. See `/home/hveno/.claude/plans/snug-soaring-treasure.md`
+for the full design.
+
+**What's built and verified:**
+- `provision.yml` gained `extra_netplan_ifaces` (host_vars-driven) to persist
+  NICs beyond mgmt. `host_vars/prod-dmz.yml` / `host_vars/prod-app.yml` pin
+  the prodint/attacknet addressing — **adapter-to-network mapping is NOT
+  symmetric between the two VMs** (Prod-DMZ's prodint NIC is `enp0s9`,
+  Prod-App's is `enp0s3`; confirmed empirically, not by assumption — VirtualBox
+  only requires both ends share an Internal Network *name*, not a slot number).
+- `harden.yml`/`nftables.conf.j2` gained an `is_app_tier` mode
+  (`group_vars/prod_app.yml`): Prod-App has no public NIC, so instead of
+  "open 80/443 to allowed_web_sources" it's "open only `app_port` (443),
+  only from Prod-DMZ's prodint address". `group_vars/prod_dmz.yml` scopes
+  `allowed_web_sources` to `attacknet` (`10.0.10.0/24`), not the `0.0.0.0/0`
+  default.
+- The single `docker-compose.yml` (Staging-only, unchanged) is split for
+  Phase 2 into `docker-compose.app-core.yml` (shared paymenter/database/cache
+  fragment, pulled in via Compose's `include:`), `docker-compose.app.yml`
+  (Prod-App: app-core + a new `app-edge` TLS terminator), and
+  `docker-compose.dmz.yml` (Prod-DMZ: `reverse-proxy` only, upstream now
+  `10.0.40.31:443` instead of the Docker-network name `paymenter:8080`).
+- **DMZ→App hop is SSL-enforced and cert-pinned**, not `proxy_ssl_verify
+  off`: `app-edge`'s self-signed cert (CN `prod-app.internal`, via
+  `certs.yml`'s now-per-host `tls_hostname`) is fetched to Prod-DMZ by a new
+  `ansible/playbooks/trust-app-cert.yml` and pinned with
+  `proxy_ssl_trusted_certificate` + `proxy_ssl_name`. Verified fingerprints
+  match exactly on both sides.
+- End-to-end proven: `curl https://paymenter.homelab.local/` from Prod-DMZ's
+  own host returns the real Paymenter login page (HTTP 200), routed through
+  the pinned HTTPS hop to Prod-App.
+
+**Two real bugs found and fixed while validating this (see
+`docs/allowlist.md` for full detail — don't re-learn these):**
+- `certs.yml` had the same play-vars-outrank-group_vars bug `harden.yml` hit
+  in Phase 1 (`tls_hostname` was hardcoded as a play `vars:`, silently
+  defeating `group_vars/prod_app.yml`'s override). Fixed by moving the
+  default to `group_vars/all.yml`.
+- **`docker-user-fw.sh.j2`'s DOCKER-USER rules matched on destination port
+  alone**, with no destination-address scoping — this silently dropped a
+  container's own *outbound* call to another host on the same port (Prod-DMZ
+  reverse-proxy → Prod-App:443), not just inbound traffic to its own
+  published ports. Invisible on Staging (nothing there ever made an outbound
+  call like this); would also have silently blocked paymenter calling a real
+  payment gateway's HTTPS API. Fixed with `-d 172.16.0.0/12` (Docker's
+  default bridge-address pool) on both the app-tier and web-tier branches.
+  Also fixed a related silent no-op in the same file: the DROP rule's
+  cleanup `iptables -D` omitted match criteria the real rule had, so it
+  never actually deleted anything — re-running `harden.yml` stacked up
+  stale duplicate rules every time. Both hosts' stale rules were manually
+  cleaned up this session; the fix is now idempotent (verified: two
+  consecutive runs, no duplicates).
+- Also removed (stopped + disabled, not purged): a stock Ubuntu `nginx`
+  package pre-installed on Prod-DMZ that was silently bound to port 80,
+  conflicting with the `reverse-proxy` container's own port binding.
+
+**Not yet done:**
+- Wiring an approval-gated promotion job into CI (`workflow_dispatch` +
+  GitHub Environment manual review) — deliberately deferred until the manual
+  path above was proven, same order Phase 1 followed. `deploy.yml`'s
+  `docker save | ssh ... docker load` image-transfer mechanism generalizes
+  directly once this is built.
+- Repointing `provision.yml`'s `paymenter_hostname`/`paymenter_ip` defaults
+  (currently Staging's) at Prod-DMZ's public identity — a deliberate one-time
+  cutover decision, not part of standing up Phase 2 in parallel with Staging.
+- None of this is committed yet.
 
 Then Phase 3 (Attacker/Kali external validation). See `docs/checklist.md` for
 the rubric tracker and `docs/test-justification.md` for gate rationale.

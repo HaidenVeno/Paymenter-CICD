@@ -1,0 +1,27 @@
+# Prod-App (Phase 2): paymenter + database + cache (docker-compose.app-core.yml,
+# included below) plus app-edge — a TLS-terminating nginx that's the ONLY way
+# in from Prod-DMZ over the prodint link. No WAF/rate-limit logic here; that
+# stays at the DMZ edge (docker-compose.dmz.yml) so it isn't duplicated.
+
+include:
+  - docker-compose.app-core.yml
+
+services:
+  app-edge:
+    security_opt:
+      - no-new-privileges:true
+    restart: always
+    image: nginx:1.27-alpine
+    ports:
+      - "443:443"
+    volumes:
+      - ./reverse-proxy/nginx.app-edge.conf:/etc/nginx/nginx.conf:ro
+      - ./reverse-proxy/conf.d/app-edge.conf:/etc/nginx/conf.d/app-edge.conf:ro
+      - ./reverse-proxy/conf.d/proxy-params.conf:/etc/nginx/conf.d/proxy-params.conf:ro
+      - ./secrets/certs:/etc/nginx/certs:ro
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE, CHOWN, SETGID, SETUID]
+    depends_on:
+      paymenter:
+        condition: service_healthy
+    networks: [app]

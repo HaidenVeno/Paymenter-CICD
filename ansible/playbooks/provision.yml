@@ -91,6 +91,39 @@
       ansible.builtin.command: netplan apply
       when: mgmt_netplan.changed
 
+    # Prod-DMZ (attacknet + prodint) and Prod-App (prodint) have NICs beyond
+    # mgmt that were only ever brought up ad-hoc (`ip addr add`, no netplan) to
+    # get connectivity confirmed — same lost-on-reboot risk the mgmt NIC had.
+    # Empty on Runner/Staging (extra_netplan_ifaces defaults to [] in
+    # group_vars/all.yml), so this is a no-op there.
+    - name: Write persistent netplan for extra interfaces (Prod-DMZ/Prod-App NICs)
+      ansible.builtin.copy:
+        dest: /etc/netplan/91-extra.yaml
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          network:
+            version: 2
+            ethernets:
+          {% for i in extra_netplan_ifaces %}
+              {{ i.iface }}:
+                dhcp4: false
+                addresses:
+                  - {{ i.address }}
+          {% endfor %}
+      register: extra_netplan
+      when: extra_netplan_ifaces | length > 0
+
+    - name: Validate netplan config (generate only, no activation)
+      ansible.builtin.command: netplan generate
+      when: extra_netplan is changed
+      changed_when: false
+
+    - name: Apply netplan (extra interface persistence)
+      ansible.builtin.command: netplan apply
+      when: extra_netplan is changed
+
     - name: Static /etc/hosts for lab name resolution
       ansible.builtin.blockinfile:
         path: /etc/hosts

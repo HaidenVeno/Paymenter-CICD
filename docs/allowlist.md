@@ -68,6 +68,61 @@ decision — check `CLAUDE.md`'s gotchas section first.
   'self'`, `base-uri 'self'`, no wildcard origins) is as strict as the
   inline/eval requirement allows.
 
+## Internal DMZ->App TLS trust — `docker/reverse-proxy/conf.d/paymenter-dmz.conf`
+
+- **Phase 2 true-DMZ split**: Prod-DMZ's edge nginx reaches Prod-App's
+  `app-edge` over the `prodint` link via HTTPS with a self-signed certificate
+  (CN/SAN `prod-app.internal`, no public CA — see `ansible/playbooks/certs.yml`
+  + `group_vars/prod_app.yml`'s `tls_hostname` override).
+- **Pinned, not bypassed**: `proxy_ssl_verify on` + `proxy_ssl_trusted_certificate`
+  (a copy of that exact cert's public half, distributed by
+  `ansible/playbooks/trust-app-cert.yml`) + `proxy_ssl_name` is used instead of
+  `proxy_ssl_verify off`. This is deliberately the stricter option — a
+  compromised/misconfigured host on `prodint` still can't MITM the hop with an
+  arbitrary self-signed cert, it would need *this specific* cert's private key.
+  `proxy_ssl_verify off` would have been simpler (no cert distribution step)
+  and was considered, but rejected as weaker for no real savings.
+- **Network segmentation is the backstop, not the primary control.**
+  `harden.yml`'s DOCKER-USER rule already restricts Prod-App's 443 to
+  Prod-DMZ's prodint address specifically (`10.0.40.30/32`) — cert pinning is
+  defense-in-depth on top of that, not a substitute for it.
+
+## Fixed bug: DOCKER-USER rules blocking container-originated traffic
+
+- **Not an allowlist entry — a real bug found and fixed** while validating
+  the Phase 2 compose split, documented here because it explains a change to
+  `ansible/playbooks/templates/docker-user-fw.sh.j2` that's easy to mistake
+  for a policy choice.
+- The DROP/RETURN rules originally matched on destination **port** alone
+  (e.g. `--dports 80,443`), with no destination **address** restriction. That
+  silently blocked any container's own *outbound* call to another host on
+  the same port — invisible on Staging (nothing there ever made such a
+  call), but it broke Prod-DMZ's reverse-proxy reaching Prod-App's
+  `app-edge:443` over `prodint` the moment the true-DMZ split needed it.
+  Symptom was a clean 504 after nginx's connect-timeout, with *nothing* in
+  nginx's own error log — the packet never left the DOCKER-USER chain.
+- **Fix**: added `-d 172.16.0.0/12` (Docker's default bridge-network address
+  pool) to both branches. Docker's own DNAT for published ports rewrites the
+  destination to the container's bridge-internal IP before DOCKER-USER ever
+  sees the packet, so restricting `-d` to that range scopes the rule to
+  "inbound to one of my published container ports" — an outbound call to a
+  real external IP (Prod-App's `10.0.40.31`, or a real payment gateway's API)
+  never matches it. Also fixes a related silent no-op: the old cleanup
+  `iptables -D ... -j DROP` omitted the protocol/port match the real rule
+  had, so it never actually deleted anything — stale duplicate rules stacked
+  up on every `harden.yml` re-run. The delete commands now mirror their
+  insert exactly.
+
+## Removed: stock Ubuntu `nginx` package on Prod-DMZ
+
+- Prod-DMZ came with the distro `nginx` package active and enabled
+  (bound to 0.0.0.0:80), left over from whatever "basic connectivity" setup
+  preceded Ansible provisioning — not something `provision.yml`/`docker.yml`
+  ever installed. It conflicted directly with the `reverse-proxy` container's
+  own port 80/443 binding (`docker compose up` failed with "address already
+  in use"). Stopped and disabled (not purged — reversible) since this host's
+  entire purpose is running the containerized proxy on those ports.
+
 ## Container identity — `docker/Dockerfile.paymenter`
 
 - **`nginx` user pinned to uid/gid `10000`/`10000`**, deliberately outside

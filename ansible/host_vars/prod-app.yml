@@ -1,0 +1,5 @@
+# See host_vars/prod-dmz.yml — same adapter-order caveat. Confirmed
+# empirically: this host's prodint NIC is enp0s3, not enp0s9 (enp0s9 is a
+# second/temporary NAT adapter here, left alone).
+extra_netplan_ifaces:
+  - { iface: enp0s3, address: "10.0.40.31/24" }  # prodint -> Prod-DMZ enp0s9

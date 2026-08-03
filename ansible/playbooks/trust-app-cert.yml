@@ -1,0 +1,38 @@
+# Distributes Prod-App's self-signed cert (public half only) to Prod-DMZ so
+# its nginx can pin it (proxy_ssl_trusted_certificate in
+# docker/reverse-proxy/conf.d/paymenter-dmz.conf) instead of skipping upstream
+# verification outright. Run once after certs.yml has generated Prod-App's
+# cert (part of site.yml against prod_app) and Prod-DMZ is provisioned.
+#
+# Requires both prod_app and prod_dmz in the play's target hosts, e.g.:
+#   ansible-playbook -i inventory.ini trust-app-cert.yml -e ansible_become_pass=...
+---
+- name: Read Prod-App's certificate
+  hosts: prod_app
+  become: true
+  vars:
+    repo_root: "{{ playbook_dir }}/../.."
+    certs_dir: "{{ repo_root }}/docker/secrets/certs"
+  tasks:
+    - name: Slurp fullchain.pem
+      ansible.builtin.slurp:
+        src: "{{ certs_dir }}/fullchain.pem"
+      register: app_cert_slurp
+
+- name: Trust Prod-App's certificate on Prod-DMZ
+  hosts: prod_dmz
+  become: true
+  vars:
+    repo_root: "{{ playbook_dir }}/../.."
+    certs_dir: "{{ repo_root }}/docker/secrets/certs"
+  tasks:
+    # Same ownership rationale as certs.yml's own fullchain.pem: reverse-proxy
+    # runs with cap_drop: [ALL], which strips root's DAC_OVERRIDE, so an
+    # explicit owner matters even though nothing here is private key material.
+    - name: Write Prod-App's fullchain.pem as a trusted upstream certificate
+      ansible.builtin.copy:
+        content: "{{ hostvars['prod-app']['app_cert_slurp']['content'] | b64decode }}"
+        dest: "{{ certs_dir }}/app-fullchain.pem"
+        owner: root
+        group: root
+        mode: "0644"
