@@ -57,7 +57,14 @@ jobs:
           UPGRADE_SERVICE_ID: ${{ vars.UPGRADE_SERVICE_ID }}
           CHECKOUT_PRODUCT_ID: ${{ vars.CHECKOUT_PRODUCT_ID }}
           RACE_COUPON_CODE: ${{ secrets.RACE_COUPON_CODE }}
-        run: pytest
+        # `pip install --break-system-packages` (no --user, but PEP 668 forces
+        # user-site anyway) puts the pytest console-script shim in
+        # ~/.local/bin, which isn't on PATH for this non-interactive shell —
+        # confirmed via pip's own warning in the previous run's log ("scripts
+        # py.test and pytest are installed in ... which is not on PATH"),
+        # bare `pytest` failed with exit 127. `python3 -m pytest` runs it via
+        # the interpreter directly, sidestepping the PATH issue entirely.
+        run: python3 -m pytest
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
