@@ -20,3 +20,4 @@
 #
 # --- Ignore (known-accepted for this app) ---------------------------------
 10054	IGNORE	Cookie without SameSite — XSRF-TOKEN must be JS-readable by design
+10010	IGNORE	Cookie No HttpOnly Flag — same XSRF-TOKEN cookie as 10054, same reason (must be JS-readable to be echoed back as X-XSRF-TOKEN; HttpOnly would break CSRF protection, not fix anything)

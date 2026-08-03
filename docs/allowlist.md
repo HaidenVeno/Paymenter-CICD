@@ -177,19 +177,42 @@ decision — check `CLAUDE.md`'s gotchas section first.
 
 ## Not yet resolved (tracked, not silently accepted)
 
-- **ZAP WARN-level findings** (`Cookie No HttpOnly Flag`, `X-Powered-By`
-  header leak, `Cross-Origin-Embedder-Policy` missing, CSP directives
-  without a fallback, `Non-Storable Content`, `Session Management Response
-  Identified`, `Re-examine Cache-control Directives`) — surfaced by the same
-  re-scan that validated the CSP fix. **Correction**: this was originally
-  assumed to be non-gating ("ZAP baseline only fails on FAIL-level by
-  default"), but that assumption was wrong — `zaproxy/action-baseline`
-  without `-I` fails the job on *any* alert regardless of `rules.tsv`'s own
-  WARN/FAIL classification, which the first real automated
-  `security-tests.yml` run surfaced (job failed with `FAIL-NEW: 0, WARN-NEW:
-  7`). Fixed by adding `cmd_options: '-I'` to the ZAP step. These findings
-  are real and worth a future pass, but are now actually non-gating as
-  intended.
+- **ZAP baseline was failing the pipeline on WARN-level findings, not just
+  FAIL-level** — `zaproxy/action-baseline` without `-I` fails the job on
+  *any* alert regardless of `rules.tsv`'s own WARN/FAIL classification. The
+  claim that "ZAP baseline only fails on FAIL-level by default" was wrong
+  until this was found and fixed (`cmd_options: '-I'`); the first real
+  automated `security-tests.yml` run surfaced it (`FAIL-NEW: 0, WARN-NEW:
+  7`, job still failed).
+- Of the 7 WARN findings that scan surfaced, two are now actually resolved:
+  - **`X-Powered-By: PHP/<version>` leak (10037)** — fixed with
+    `proxy_hide_header X-Powered-By;` in `proxy-params.conf` (shared across
+    every proxying location in `paymenter.conf`/`paymenter-dmz.conf`/
+    `app-edge.conf`), same technique already used there for
+    `Access-Control-Allow-Origin`.
+  - **`Cookie No HttpOnly Flag` on `XSRF-TOKEN` (10010)** — not a bug to fix,
+    reclassified `IGNORE` in `rules.tsv` alongside the existing 10054 entry
+    for the same cookie. `XSRF-TOKEN` is deliberately JS-readable (Laravel
+    echoes it back as the `X-XSRF-TOKEN` header for CSRF protection) —
+    making it HttpOnly would *break* CSRF protection, not improve it.
+- **Still open, deliberately deferred:**
+  - **COEP/COOP/CORP headers missing (90004, x6)** — enabling
+    `Cross-Origin-Embedder-Policy` requires every cross-origin resource the
+    page loads to send correct CORP/CORS headers. For a payment platform
+    that will likely need to embed real payment-gateway widgets/iframes,
+    turning this on without auditing every third-party integration risks
+    silently breaking payment flows — worse than the finding itself.
+  - **CSP: Failure to Define Directive with No Fallback (10055)** — flagged
+    against the CSP header added earlier this session. `object-src`/
+    `frame-ancestors`/`base-uri`/`form-action` are already explicitly set;
+    needs investigation into exactly which directive ZAP considers
+    fallback-less before changing the policy, not a guess.
+  - Purely informational, not actionable: `Non-Storable Content` (10049 —
+    pages correctly sending `Cache-Control: no-store`, which is *good*
+    practice being misflagged), `Re-examine Cache-control Directives` on
+    `robots.txt` (10015), `Session Management Response Identified` (10112 —
+    ZAP noting it found the session cookie for its own analysis, not a
+    vulnerability).
 - **`security/tests/auth/test_oauth_key_perms.py`** skips with "paymenter
   container not found / docker unavailable" — same runner-vs-deploy-target
   assumption `config-audit.sh` had until Phase 1's fix, just not yet ported
