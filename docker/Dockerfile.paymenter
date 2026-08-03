@@ -47,11 +47,30 @@ WORKDIR /app
 # Fail a pipeline (e.g. curl | php) if any stage errors, not just the last.
 SHELL ["/bin/ash", "-o", "pipefail", "-c"]
 
+# nginx's uid/gid pinned explicitly, well outside the range Alpine's system
+# packages allocate from (a low double/triple-digit number, order-dependent
+# on install order): apk assigns system uids/gids by install order, so an
+# unrelated package gaining or losing a claim on a low id (exactly what the
+# `apk upgrade` above can do) silently shifts nginx to a different uid on
+# the next build — and can even collide with whatever numeric id we try to
+# force it back to (hit this immediately: forcing gid 101 failed outright
+# because something else had already claimed it too). secrets.yml hardcodes
+# ownership to this uid for the files it bind-mounts into this container
+# (standalone `docker compose` doesn't honor per-service secrets: uid/gid
+# overrides, so host-side ownership is what the container actually sees) —
+# found this the hard way when the apk upgrade added above for the OpenSSL
+# CVE fix shifted nginx off the id secrets.yml assumed and broke every
+# secret read in the very next deploy. 10000/10000 is far outside anything
+# apk's system-account allocator will ever reach.
 RUN apk update \
     && apk upgrade --no-cache \
     && apk add --no-cache --update \
         ca-certificates curl supervisor tar unzip nginx \
         libpng-dev libxml2-dev libzip-dev icu-dev gmp-dev \
+    && deluser nginx 2>/dev/null || true \
+    && delgroup nginx 2>/dev/null || true \
+    && addgroup -g 10000 nginx \
+    && adduser -D -H -u 10000 -G nginx -s /sbin/nologin nginx \
     && apk add --no-cache --virtual .build-deps \
         autoconf make g++ gcc libc-dev linux-headers \
     && docker-php-ext-configure zip \
