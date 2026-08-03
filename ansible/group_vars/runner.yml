@@ -1,0 +1,4 @@
+# certs.yml's self-signed cert gets this CN/SAN when run against the Runner
+# (docker-compose.registry.yml's local Docker registry) instead of the
+# public paymenter.homelab.local name Staging/Prod-DMZ carry.
+tls_hostname: "registry.homelab.local"

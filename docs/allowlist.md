@@ -87,6 +87,48 @@ decision — check `CLAUDE.md`'s gotchas section first.
   Prod-DMZ's prodint address specifically (`10.0.40.30/32`) — cert pinning is
   defense-in-depth on top of that, not a substitute for it.
 
+## Local registry — `docker/docker-compose.registry.yml`
+
+- **Purpose**: `deploy.yml` builds and Trivy-scans one image; `promote-prod.yml`
+  needs to deploy the *exact same bytes* to Prod-App, not rebuild. A local
+  registry (`registry:2`) lets the digest travel by reference instead of
+  `docker save`/`docker load` — same content-addressable guarantee, but
+  reusable across a workflow boundary (deploy.yml push → promote-prod.yml
+  pull, potentially days apart).
+- **Location**: on the Runner (already the trusted build host). Published
+  port bound to the Runner's mgmt IP specifically (`10.0.20.10:5000:5000`,
+  not `0.0.0.0`), which alone scopes reachability to mgmtnet without a new
+  nftables ruleset — the Runner has never been a `harden.yml` target and
+  doesn't need to become one for this.
+- **TLS: self-signed cert, pinned on every consumer's Docker trust store**
+  (`/etc/docker/certs.d/registry.homelab.local:5000/ca.crt` on `runner`,
+  `staging`, `prod_app` — Prod-DMZ never runs `paymenter`, doesn't need it).
+  Considered and rejected `insecure-registries` for the same reason
+  `proxy_ssl_verify off` was rejected for the DMZ→App hop: mgmtnet-only
+  reachability is a real control, but pinning costs little extra and doesn't
+  rely on network position being the *only* thing standing between a
+  plaintext pull and an attacker who's already gotten onto mgmtnet.
+- Verified: fingerprint match across Runner/Staging/Prod-App's trusted
+  copies, and a manual push+pull-by-digest from all three before wiring
+  anything into CI.
+
+## Approval gate — GitHub Environment `production`
+
+- **Private + Free-plan repos can't get required-reviewers or wait-timer
+  protection rules from GitHub** (`422`: "billing plan supports the
+  required reviewers protection rule") — both are Team/Enterprise-only for
+  private repos, though free on public ones. Made the repo **public** to
+  unlock this rather than settle for an ungated environment or a paid
+  upgrade; confirmed via a full-history Gitleaks scan (not just the
+  working tree — `docker/secrets/certs/privkey.pem` triggers a hit in
+  `--no-git` mode but is confirmed gitignored/never committed) that nothing
+  sensitive was in the 21-commit history before flipping visibility.
+- `promote-prod.yml`'s `environment: production` is what GitHub actually
+  gates on the required reviewer — `workflow_dispatch` alone (no push
+  trigger) is a meaningful gate on its own (only a collaborator with write
+  access can trigger it), but the Environment protection rule adds a real
+  pause-for-review step GitHub enforces, not just an access-control implication.
+
 ## Fixed bug: DOCKER-USER rules blocking container-originated traffic
 
 - **Not an allowlist entry — a real bug found and fixed** while validating
