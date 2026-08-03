@@ -33,11 +33,12 @@ jobs:
           repository: ${{ env.APP_REPO }}
           ref: ${{ env.APP_REF }}
           path: app
-      - name: Install Semgrep
-        run: pip install semgrep --break-system-packages
-
+      # Docker image, not the pip CLI — matches what's actually validated
+      # (docs/CLAUDE.md's local-validation command uses semgrep/semgrep too;
+      # a bare `pip install semgrep` was never run anywhere before this).
       - name: Blocking gate — ERROR severity (custom + p/default + OWASP Top 10)
         run: >-
+          docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep
           semgrep scan
           --config security/semgrep/rules
           --config p/default
@@ -47,11 +48,15 @@ jobs:
           app
 
       - name: Blocking gate — pipeline IaC hardening (custom rules)
-        run: semgrep scan --config security/semgrep/rules --error docker ansible scripts
+        run: >-
+          docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep
+          semgrep scan --config security/semgrep/rules --error
+          docker ansible scripts
 
       - name: Report-only — full ruleset (archived, not gated)
         if: always()
         run: >-
+          docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep
           semgrep scan
           --config p/default --config p/security-audit --config p/secrets
           --sarif --output semgrep-report.sarif app || true
@@ -62,6 +67,8 @@ jobs:
         with:
           name: semgrep-reports
           path: semgrep-*.sarif
+      - if: always()
+        uses: ./.github/actions/reclaim-workspace
 
   # ---------------------------------------------------------------------------
   # ESLint (eslint-plugin-security) over the app's first-party JS.
@@ -79,18 +86,26 @@ jobs:
       - name: Install ESLint + security plugin
         working-directory: security/eslint-security
         run: npm ci
+      # Run from the workspace root, not security/eslint-security: ESLint 9's
+      # flat config treats anything outside the CWD's directory tree as
+      # "outside the base path" and silently ignores it — a ../../app glob
+      # run from security/eslint-security matches zero lintable files and
+      # exits 2. Reproduced locally; this layout is the fix, not a config
+      # tweak.
       - name: Run ESLint security scan
-        working-directory: security/eslint-security
         run: >-
-          npx eslint --config eslint.config.mjs
-          "../../app/themes/default/js/**/*.js"
-          -f json -o "$GITHUB_WORKSPACE/eslint-results.json"
+          npx --prefix security/eslint-security eslint
+          --config security/eslint-security/eslint.config.mjs
+          "app/themes/default/js/**/*.js"
+          -f json -o eslint-results.json
       - name: Upload ESLint report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: eslint-report
           path: eslint-results.json
+      - if: always()
+        uses: ./.github/actions/reclaim-workspace
 
   # ---------------------------------------------------------------------------
   # Secret scanning — Gitleaks. Gates on any detected secret. Calibrated: the
@@ -118,6 +133,8 @@ jobs:
         with:
           name: gitleaks-report
           path: gitleaks.sarif
+      - if: always()
+        uses: ./.github/actions/reclaim-workspace
 
   # ---------------------------------------------------------------------------
   # Dockerfile linting — Hadolint. Gates at warning threshold; .hadolint.yaml
@@ -133,6 +150,8 @@ jobs:
           dockerfile: docker/Dockerfile.paymenter
           config: .hadolint.yaml
           failure-threshold: warning
+      - if: always()
+        uses: ./.github/actions/reclaim-workspace
 
   # ---------------------------------------------------------------------------
   # IaC / container misconfig — Trivy config. Gates on HIGH/CRITICAL. Validates
@@ -144,7 +163,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Trivy config scan
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           scan-type: config
           scan-ref: docker
@@ -158,6 +177,8 @@ jobs:
         with:
           name: trivy-config-report
           path: trivy-config.sarif
+      - if: always()
+        uses: ./.github/actions/reclaim-workspace
 
   # ---------------------------------------------------------------------------
   # Software Composition Analysis — OWASP Dependency-Check. Fails on High+.
@@ -165,6 +186,8 @@ jobs:
   dependency-check:
     runs-on: self-hosted
     steps:
+      - name: Checkout pipeline repo
+        uses: actions/checkout@v4
       - name: Checkout application source
         uses: actions/checkout@v4
         with:
@@ -187,6 +210,8 @@ jobs:
         with:
           name: dependency-check-report
           path: reports/
+      - if: always()
+        uses: ./.github/actions/reclaim-workspace
 
   # ---------------------------------------------------------------------------
   # Developer notification — fires if any scan gate above fails (Stage 4).
