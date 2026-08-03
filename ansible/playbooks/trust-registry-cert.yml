@@ -1,0 +1,45 @@
+# Distributes the Runner's local-registry cert (docker-compose.registry.yml,
+# self-signed via certs.yml + group_vars/runner.yml's tls_hostname) to every
+# host that ever pulls from it — runner (pushes from its own build), staging,
+# and prod_app. Prod-DMZ never runs paymenter, so it never needs this.
+#
+# Written to Docker's own certs.d trust path rather than the system CA store
+# — Docker reads /etc/docker/certs.d/<host>:<port>/ca.crt per-pull, no daemon
+# restart required. Same slurp+hostvars cross-host pattern as
+# trust-app-cert.yml, same reasoning: pinned trust, not insecure-registries.
+#
+# Run once after certs.yml has generated the Runner's registry cert.
+---
+- name: Read the registry's certificate
+  hosts: runner
+  become: true
+  vars:
+    repo_root: "{{ playbook_dir }}/../.."
+    certs_dir: "{{ repo_root }}/docker/secrets/certs"
+  tasks:
+    - name: Slurp fullchain.pem
+      ansible.builtin.slurp:
+        src: "{{ certs_dir }}/fullchain.pem"
+      register: registry_cert_slurp
+
+- name: Trust the registry's certificate
+  hosts: runner:staging:prod_app
+  become: true
+  vars:
+    registry_certs_d: "/etc/docker/certs.d/registry.homelab.local:5000"
+  tasks:
+    - name: Ensure the certs.d directory exists for this registry
+      ansible.builtin.file:
+        path: "{{ registry_certs_d }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Write the registry's certificate as a trusted CA for Docker
+      ansible.builtin.copy:
+        content: "{{ hostvars['runner']['registry_cert_slurp']['content'] | b64decode }}"
+        dest: "{{ registry_certs_d }}/ca.crt"
+        owner: root
+        group: root
+        mode: "0644"

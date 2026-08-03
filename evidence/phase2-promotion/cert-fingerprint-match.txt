@@ -1,0 +1,12 @@
+Verification: the registry's TLS cert (self-signed, generated on the
+Runner) is trusted identically across every consumer via
+/etc/docker/certs.d/registry.homelab.local:5000/ca.crt, not
+insecure-registries. SHA-256 fingerprint of the cert as seen from each host:
+runner   (source, docker/secrets/certs/fullchain.pem):
+sha256 Fingerprint=4D:E0:4F:6B:55:B5:36:C7:2D:CF:B5:D8:45:33:1B:07:36:32:D6:F0:21:F7:D7:2E:99:74:90:50:A9:EF:41:5B
+runner   (own certs.d trust copy):
+sha256 Fingerprint=4D:E0:4F:6B:55:B5:36:C7:2D:CF:B5:D8:45:33:1B:07:36:32:D6:F0:21:F7:D7:2E:99:74:90:50:A9:EF:41:5B
+staging  (certs.d trust copy):
+sha256 Fingerprint=4D:E0:4F:6B:55:B5:36:C7:2D:CF:B5:D8:45:33:1B:07:36:32:D6:F0:21:F7:D7:2E:99:74:90:50:A9:EF:41:5B
+prod-app (certs.d trust copy):
+sha256 Fingerprint=4D:E0:4F:6B:55:B5:36:C7:2D:CF:B5:D8:45:33:1B:07:36:32:D6:F0:21:F7:D7:2E:99:74:90:50:A9:EF:41:5B

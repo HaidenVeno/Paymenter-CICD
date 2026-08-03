@@ -1,0 +1,20 @@
+=== docker push (Runner -> local registry) ===
+a13388a54e64: Layer already exists
+eb3d19becc9c: Layer already exists
+fd93c9b9be67: Layer already exists
+d6c1e5a46eec: Layer already exists
+evidence-test: digest: sha256:411580b5c82e47622faaa2db16a14d2d761f77eaa3a12500a43f8ed2040cd393 size: 856
+
+Resolved digest: sha256:411580b5c82e47622faaa2db16a14d2d761f77eaa3a12500a43f8ed2040cd393
+
+=== docker pull by digest (Staging) ===
+registry.homelab.local:5000/paymenter@sha256:411580b5c82e47622faaa2db16a14d2d761f77eaa3a12500a43f8ed2040cd393: Pulling from paymenter
+Digest: sha256:411580b5c82e47622faaa2db16a14d2d761f77eaa3a12500a43f8ed2040cd393
+Status: Image is up to date for registry.homelab.local:5000/paymenter@sha256:411580b5c82e47622faaa2db16a14d2d761f77eaa3a12500a43f8ed2040cd393
+registry.homelab.local:5000/paymenter@sha256:411580b5c82e47622faaa2db16a14d2d761f77eaa3a12500a43f8ed2040cd393
+
+=== docker pull by digest (Prod-App) ===
+registry.homelab.local:5000/paymenter@sha256:411580b5c82e47622faaa2db16a14d2d761f77eaa3a12500a43f8ed2040cd393: Pulling from paymenter
+Digest: sha256:411580b5c82e47622faaa2db16a14d2d761f77eaa3a12500a43f8ed2040cd393
+Status: Image is up to date for registry.homelab.local:5000/paymenter@sha256:411580b5c82e47622faaa2db16a14d2d761f77eaa3a12500a43f8ed2040cd393
+registry.homelab.local:5000/paymenter@sha256:411580b5c82e47622faaa2db16a14d2d761f77eaa3a12500a43f8ed2040cd393

@@ -285,16 +285,55 @@ for the full design.
   package pre-installed on Prod-DMZ that was silently bound to port 80,
   conflicting with the `reverse-proxy` container's own port binding.
 
+Compose split is committed on `phase2/dmz-app-split` (PR #9, not yet merged).
+
+## Approval-gated production promotion (local registry + `promote-prod.yml`)
+Built on branch `phase2/registry-promotion` (stacked on `phase2/dmz-app-split`
+— it depends on `docker-compose.app.yml`/`docker-compose.dmz.yml` existing).
+
+- **Local registry** (`docker/docker-compose.registry.yml`): `registry:2` on
+  the Runner, port bound to the Runner's mgmt IP specifically
+  (`10.0.20.10:5000`, not `0.0.0.0`) — that alone scopes reachability to
+  mgmtnet, no new nftables ruleset needed. TLS via `certs.yml` against the
+  `runner` host (`group_vars/runner.yml`'s `tls_hostname:
+  registry.homelab.local`); the cert is **pinned** on every consumer
+  (`ansible/playbooks/trust-registry-cert.yml` → `/etc/docker/certs.d/registry.homelab.local:5000/ca.crt`
+  on `runner`/`staging`/`prod_app`), not `insecure-registries` — same
+  reasoning as rejecting `proxy_ssl_verify off` earlier. Verified: fingerprint
+  match across all three hosts, manual push+pull-by-digest before touching
+  CI. Evidence in `evidence/phase2-promotion/`.
+- **`deploy.yml`** now pushes the Trivy-scanned, health-checked image to the
+  registry (by digest, after the existing health-check step — never a
+  built-but-unvalidated image) and records it as the repo variable
+  `STAGING_VALIDATED_DIGEST` via `gh variable set` (needs `permissions:
+  actions: write` on that job).
+- **New workflow `promote-prod.yml`**: `workflow_dispatch`-only (optional
+  `digest` input, defaults to `STAGING_VALIDATED_DIGEST`), gated by
+  `environment: production`. Pulls that exact digest onto Prod-App, brings up
+  `docker-compose.app.yml`, health-checks it, then brings up
+  `docker-compose.dmz.yml` on Prod-DMZ and confirms end-to-end.
+- **The repo is now public** (`gh repo edit --visibility public`) — required
+  because GitHub's required-reviewers/wait-timer Environment protection
+  rules need GitHub Team/Enterprise for *private* repos (free on public
+  ones), and this repo is on the Free plan. Confirmed via a full-history
+  Gitleaks scan (21 commits, not just the working tree) that nothing
+  sensitive was in history before flipping visibility — see
+  `docs/allowlist.md`. The `production` GitHub Environment exists with
+  HaidenVeno as the required reviewer (`gh api .../environments/production`).
+- **Deliberately unchanged**: Staging's own deploy path (`docker save | ssh |
+  docker load`) — the registry only needed to hold a copy for later
+  promotion, not replace how Staging gets its image.
+
 **Not yet done:**
-- Wiring an approval-gated promotion job into CI (`workflow_dispatch` +
-  GitHub Environment manual review) — deliberately deferred until the manual
-  path above was proven, same order Phase 1 followed. `deploy.yml`'s
-  `docker save | ssh ... docker load` image-transfer mechanism generalizes
-  directly once this is built.
+- End-to-end test of `promote-prod.yml` itself (trigger it, confirm the
+  review-gate actually pauses the run, approve, confirm Prod-App+Prod-DMZ
+  serve the promoted digest) — next immediate step.
 - Repointing `provision.yml`'s `paymenter_hostname`/`paymenter_ip` defaults
   (currently Staging's) at Prod-DMZ's public identity — a deliberate one-time
-  cutover decision, not part of standing up Phase 2 in parallel with Staging.
-- None of this is committed yet.
+  cutover decision, waits until Phase 3 proves segmentation (explicit
+  instruction: Phase 3 before any hostname cutover).
+- None of the registry/promotion work is committed yet.
 
-Then Phase 3 (Attacker/Kali external validation). See `docs/checklist.md` for
+Then Phase 3 (Attacker/Kali external validation) — needs its own VM stand-up
+(same as Prod-DMZ/Prod-App did), not yet started. See `docs/checklist.md` for
 the rubric tracker and `docs/test-justification.md` for gate rationale.

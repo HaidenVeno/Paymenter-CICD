@@ -1,0 +1,10 @@
+Verification: local registry (registry.homelab.local:5000 on the Runner)
+serves valid TLS with the self-signed cert issued by certs.yml.
+--- openssl x509 subject/SAN ---
+subject=CN = registry.homelab.local
+X509v3 Subject Alternative Name: 
+    DNS:registry.homelab.local
+
+--- curl https://registry.homelab.local:5000/v2/ (registry API root) ---
+{}
+HTTP 200

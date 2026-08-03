@@ -27,6 +27,8 @@
       - { name: staging, ip: 10.0.20.20 }
       - { name: prod-dmz, ip: 10.0.20.30 }
       - { name: prod-app, ip: 10.0.20.31 }
+      # Local registry (docker-compose.registry.yml), lives on the Runner.
+      - { name: registry.homelab.local, ip: 10.0.20.10 }
     # Staging today; repoint at Prod-DMZ's public IP when Phase 2 promotes.
     paymenter_hostname: paymenter.homelab.local
     paymenter_ip: 10.0.20.20

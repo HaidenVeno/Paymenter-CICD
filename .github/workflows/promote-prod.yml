@@ -1,0 +1,128 @@
+name: Promote to Production
+
+# Approval-gated: the `promote` job's `environment: production` is what
+# GitHub actually gates on required reviewers (configured once via
+# `gh api .../environments/production`, see docs/allowlist.md). This is
+# deliberately workflow_dispatch-only, never push-triggered — promotion is a
+# separate, reviewed action from Staging's automatic deploy, not something
+# that happens as a side effect of merging to main.
+on:
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: >-
+          Image digest to promote (sha256:...). Leave blank to use the
+          digest deploy.yml last recorded as healthy on Staging
+          (STAGING_VALIDATED_DIGEST repo variable).
+        required: false
+
+env:
+  REGISTRY: registry.homelab.local:5000
+  DEPLOY_USER: ${{ vars.DEPLOY_USER || 'hveno' }}
+  DEPLOY_SSH_KEY: ${{ vars.DEPLOY_SSH_KEY || '/home/hveno/.ssh/id_ed25519_deploy' }}
+  DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/home/hveno/Paymenter-CICD/docker' }}
+  PROD_APP_HOST: ${{ vars.PROD_APP_HOST || '10.0.20.31' }}
+  PROD_DMZ_HOST: ${{ vars.PROD_DMZ_HOST || '10.0.20.30' }}
+  DIGEST: ${{ inputs.digest || vars.STAGING_VALIDATED_DIGEST }}
+
+jobs:
+  promote:
+    runs-on: self-hosted
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Confirm a digest was resolved
+        run: |
+          if [ -z "$DIGEST" ]; then
+            echo "No digest supplied and STAGING_VALIDATED_DIGEST is unset — nothing to promote." >&2
+            exit 1
+          fi
+          echo "Promoting $DIGEST"
+
+      - name: Sync compose context to Prod-App
+        run: |
+          rsync -az --delete --exclude secrets \
+            -e "ssh -o StrictHostKeyChecking=accept-new -i $DEPLOY_SSH_KEY" \
+            docker/ "$DEPLOY_USER@$PROD_APP_HOST:$DEPLOY_PATH/"
+
+      - name: Pull the promoted digest and bring up the app tier
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new -i "$DEPLOY_SSH_KEY" \
+            "$DEPLOY_USER@$PROD_APP_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' REGISTRY='$REGISTRY' DIGEST='$DIGEST' bash -s" <<'REMOTE'
+          cd "$DEPLOY_PATH"
+          docker pull "$REGISTRY/paymenter@$DIGEST"
+          docker tag "$REGISTRY/paymenter@$DIGEST" paymenter:local
+          docker compose -f docker-compose.app.yml up -d --no-build --remove-orphans
+          REMOTE
+
+      - name: Wait for app tier health
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new -i "$DEPLOY_SSH_KEY" \
+            "$DEPLOY_USER@$PROD_APP_HOST" "DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE'
+          for i in $(seq 1 30); do
+            cid="$(docker compose -f "$DEPLOY_PATH/docker-compose.app.yml" ps -q paymenter)"
+            status="$(docker inspect -f '{{.State.Health.Status}}' "$cid" 2>/dev/null)"
+            if [ "$status" = "healthy" ]; then
+              echo "paymenter healthy"; exit 0
+            fi
+            echo "waiting for health ($i/30)..."; sleep 5
+          done
+          echo "app did not become healthy in time"; exit 1
+          REMOTE
+
+      - name: Sync compose context to Prod-DMZ
+        run: |
+          rsync -az --delete --exclude secrets \
+            -e "ssh -o StrictHostKeyChecking=accept-new -i $DEPLOY_SSH_KEY" \
+            docker/ "$DEPLOY_USER@$PROD_DMZ_HOST:$DEPLOY_PATH/"
+
+      - name: Bring up the DMZ tier
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new -i "$DEPLOY_SSH_KEY" \
+            "$DEPLOY_USER@$PROD_DMZ_HOST" "DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE'
+          cd "$DEPLOY_PATH"
+          docker compose -f docker-compose.dmz.yml up -d --no-build --remove-orphans
+          REMOTE
+
+      - name: End-to-end check through the DMZ
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new -i "$DEPLOY_SSH_KEY" \
+            "$DEPLOY_USER@$PROD_DMZ_HOST" \
+            "curl -sk --resolve paymenter.homelab.local:443:127.0.0.1 \
+              -o /dev/null -w '%{http_code}' https://paymenter.homelab.local/" \
+            | grep -q '^200$'
+
+      - if: always()
+        uses: ./.github/actions/reclaim-workspace
+
+  notify:
+    needs: promote
+    if: failure()
+    runs-on: self-hosted
+    permissions:
+      issues: write
+    steps:
+      - name: Post to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "No DISCORD_WEBHOOK_URL set, skipping."; exit 0
+          fi
+          curl -H "Content-Type: application/json" -X POST \
+            -d "{\"content\": \"Production promotion failed on ${{ github.repository }} — run ${{ github.run_id }}: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}" \
+            "$DISCORD_WEBHOOK_URL"
+
+      - name: Open GitHub Issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Production promotion failure — run ${context.runId}`,
+              body: `promote-prod.yml failed. See ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              labels: ['security', 'deploy', 'production']
+            });

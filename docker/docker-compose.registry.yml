@@ -1,0 +1,30 @@
+# Local Docker registry on the Runner — lets deploy.yml push the exact
+# Trivy-scanned, health-checked digest that ran on Staging, and promote-prod.yml
+# pull that same digest onto Prod-App (never a rebuild, never "close enough").
+#
+# Published port is bound to the Runner's mgmt IP specifically (not
+# 0.0.0.0), not a random :5000 anywhere — that alone scopes reachability to
+# mgmtnet without a new nftables ruleset (the Runner has never been a
+# harden.yml target and doesn't need to become one just for this). TLS via a
+# self-signed cert (ansible/playbooks/certs.yml against the runner host,
+# group_vars/runner.yml's tls_hostname), pinned on every consumer
+# (ansible/playbooks/trust-registry-cert.yml) — not insecure-registries, same
+# reasoning as rejecting proxy_ssl_verify off for the DMZ->App hop.
+#
+# Brought up once, manually — restart: always keeps it running; it isn't
+# recreated per pipeline run.
+services:
+  registry:
+    image: registry:2
+    restart: always
+    ports:
+      - "10.0.20.10:5000:5000"
+    environment:
+      REGISTRY_HTTP_TLS_CERTIFICATE: /certs/fullchain.pem
+      REGISTRY_HTTP_TLS_KEY: /certs/privkey.pem
+    volumes:
+      - ./secrets/certs:/certs:ro
+      - registry-data:/var/lib/registry
+
+volumes:
+  registry-data:
