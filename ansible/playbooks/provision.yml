@@ -11,6 +11,14 @@
   hosts: "{{ provision_target | default('staging') }}"
   become: true
   vars:
+    # Matches secrets.yml/certs.yml's repo_root so the directory they
+    # auto-create parents for (owned by root, since those tasks run via
+    # become with no owner: set) is already deploy-user-owned by the time
+    # they run. Without this, a fresh box's first site.yml run recreates
+    # ~/Paymenter-CICD/docker as root:root, and deploy.yml's rsync step
+    # (running as the plain deploy user, no become) fails with permission
+    # denied.
+    repo_root: "{{ playbook_dir }}/../.."
     # Overridable per-host via group_vars/host_vars (e.g. Prod-DMZ has extra
     # NICs and may not use enp0s8 for mgmt).
     mgmt_iface: enp0s8
@@ -37,6 +45,21 @@
         name: ssh
         enabled: true
         state: started
+
+    # secrets.yml/certs.yml create docker/secrets/* under this same repo_root
+    # via become (root, no owner: set) — only the leaf paths they manage stay
+    # root-owned on purpose. This just makes sure the tree they hang off of is
+    # writable by the deploy user for deploy.yml's rsync step.
+    - name: Ensure deploy directory tree exists, owned by the deploy user
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0750"
+      loop:
+        - "{{ repo_root }}"
+        - "{{ repo_root }}/docker"
 
     # The mgmt IP was previously applied out-of-band (ad-hoc `ip addr`/`nmcli`,
     # no boot-time persistence) — a reboot loses it and strands the box off
