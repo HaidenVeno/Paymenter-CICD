@@ -27,10 +27,16 @@ table inet filter {
         # SSH from management network only
         ip saddr {{ management_cidr }} tcp dport {{ ssh_port }} accept
 
+{% if is_app_tier %}
+        # App tier (no public NIC): only the DMZ proxy may reach the app port,
+        # over the internal prodint link — no 80/443 listener here at all.
+        ip saddr {{ app_upstream_cidr }} tcp dport {{ app_port }} accept
+{% else %}
         # Published web ports (nginx reverse proxy). Note: Docker's own NAT may
         # short-circuit this for container ports; DOCKER-USER is the primary
         # control. This rule covers host-process listeners on the same ports.
         ip saddr {{ allowed_web_sources }} tcp dport { 80, 443 } accept
+{% endif %}
     }
 
     chain forward {

@@ -1,0 +1,98 @@
+# Shared app-tier fragment: paymenter + database + cache. Pulled in via
+# Compose's `include:` from docker-compose.app.yml (Prod-App) so the service
+# defs aren't duplicated between compose files. Staging's docker-compose.yml
+# does NOT include this — it predates the Phase 2 split and stays a single
+# self-contained file (proven in Phase 1, left untouched on purpose).
+
+x-security: &hardening
+  security_opt:
+    - no-new-privileges:true
+  restart: always
+
+services:
+  paymenter:
+    <<: *hardening
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.paymenter
+    image: paymenter:local
+    environment:
+      APP_ENV: "production"
+      APP_DEBUG: "false"
+      APP_URL: "https://paymenter.homelab.local"
+      ASSET_URL: "https://paymenter.homelab.local"
+      SESSION_SECURE_COOKIE: "true"
+      TRUSTED_PROXIES: "*"
+      DB_CONNECTION: "mariadb"
+      DB_HOST: "database"
+      DB_PORT: "3306"
+      DB_DATABASE: "paymenter"
+      DB_USERNAME: "paymenter"
+      DB_PASSWORD_FILE: "/run/secrets/db_password"
+      APP_KEY_FILE: "/run/secrets/app_key"
+      CACHE_STORE: "redis"
+      QUEUE_CONNECTION: "redis"
+      REDIS_HOST: "cache"
+      REDIS_PORT: "6379"
+      PAYMENTER_SKIP_DEFAULT: "false"
+    secrets: [app_key, db_password]
+    volumes:
+      - app-var:/app/var
+      - app-storage-logs:/app/storage/logs
+      - app-storage-public:/app/storage/app/public
+    cap_drop: [ALL]
+    networks: [app, db]
+
+  database:
+    <<: *hardening
+    image: mariadb:11.4
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      MARIADB_DATABASE: "paymenter"
+      MARIADB_USER: "paymenter"
+      MARIADB_PASSWORD_FILE: "/run/secrets/db_password"
+      MARIADB_ROOT_PASSWORD_FILE: "/run/secrets/db_root_password"
+    secrets: [db_password, db_root_password]
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks: [db]
+
+  cache:
+    <<: *hardening
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - cache-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks: [db]
+
+networks:
+  app:
+    driver: bridge
+  db:
+    driver: bridge
+    internal: true
+
+volumes:
+  app-var:
+  app-storage-logs:
+  app-storage-public:
+  db-data:
+  cache-data:
+
+secrets:
+  app_key:
+    file: ./secrets/app_key
+  db_password:
+    file: ./secrets/db_password
+  db_root_password:
+    file: ./secrets/db_root_password

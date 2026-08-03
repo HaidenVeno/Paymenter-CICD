@@ -7,3 +7,22 @@
 allowed_web_sources: "0.0.0.0/0"
 # Source(s) allowed to SSH in. Tighten this per environment.
 management_cidr: "192.168.0.0/24"
+
+# Extra static interfaces beyond mgmt (e.g. Prod-DMZ's attacknet/prodint NICs,
+# Prod-App's prodint NIC) that provision.yml should persist via netplan.
+# Empty by default (Runner/Staging only have mgmt); per-host overrides live in
+# host_vars/<hostname>.yml. List of {iface, address} — address includes the
+# /prefix, e.g. "10.0.40.30/24".
+extra_netplan_ifaces: []
+
+# harden.yml/nftables.conf.j2 default to a web-facing host (80/443 open to
+# allowed_web_sources). Prod-App (Phase 2) has no public NIC and shouldn't
+# expose 80/443 at all — only its app port, reachable from the DMZ proxy over
+# prodint. Set is_app_tier: true + app_port/app_upstream_cidr in that host's
+# group_vars to switch modes; every other host keeps this (unchanged) default.
+is_app_tier: false
+
+# certs.yml's self-signed-cert CN/SAN. Staging/Prod-DMZ use this public
+# hostname; Prod-App overrides it to "prod-app.internal" in its own
+# group_vars (Phase 2's pinned-cert internal DMZ->App hop).
+tls_hostname: "paymenter.homelab.local"

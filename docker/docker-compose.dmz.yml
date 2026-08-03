@@ -1,0 +1,33 @@
+# Prod-DMZ (Phase 2): reverse proxy + WAF only. The only public-facing host
+# in the lab (docs/network-topology.md) — paymenter/db/cache never run here,
+# hence no `include` of docker-compose.app-core.yml.
+
+x-security: &hardening
+  security_opt:
+    - no-new-privileges:true
+  restart: always
+
+services:
+  reverse-proxy:
+    <<: *hardening
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./reverse-proxy/nginx.dmz.conf:/etc/nginx/nginx.conf:ro
+      - ./reverse-proxy/conf.d/paymenter-dmz.conf:/etc/nginx/conf.d/paymenter.conf:ro
+      - ./reverse-proxy/conf.d/security-headers.conf:/etc/nginx/conf.d/security-headers.conf:ro
+      - ./reverse-proxy/conf.d/proxy-params.conf:/etc/nginx/conf.d/proxy-params.conf:ro
+      - ./secrets/certs:/etc/nginx/certs:ro
+      - certbot-webroot:/var/www/certbot:ro
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE, CHOWN, SETGID, SETUID]
+    networks: [frontend]
+
+networks:
+  frontend:
+    driver: bridge
+
+volumes:
+  certbot-webroot:

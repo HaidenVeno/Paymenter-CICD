@@ -1,0 +1,27 @@
+# Prod-App has no public NIC (app + db + cache only) — see
+# docs/network-topology.md. is_app_tier switches harden.yml's nftables/
+# DOCKER-USER rules from "open 80/443 to allowed_web_sources" to "open only
+# app_port, only from the DMZ proxy". app_upstream_cidr is Prod-DMZ's prodint
+# address specifically (/32, not the whole prodint subnet) since Prod-App is
+# never meant to take traffic from anything else on that link.
+#
+# app_port is 443, not a plain-HTTP port — the DMZ-to-App hop is also
+# SSL-enforced (self-signed cert is fine internally; no cleartext hop even
+# though both ends are inside the lab). This is a planned convention, not yet
+# real: today's docker-compose.yml still runs reverse-proxy + paymenter + db +
+# cache as one stack for Staging's single-VM soft-DMZ model. Splitting it
+# into a Prod-DMZ-side (edge nginx/WAF/TLS) and Prod-App-side (app-tier
+# nginx + php-fpm + app + db + cache, publishing 443 with its own cert) is
+# the next concrete Phase 2 step — this firewall rule is provisioned ahead of
+# that so hardening isn't the last thing standing between the split and a
+# real test.
+management_cidr: "10.0.20.0/24"
+is_app_tier: true
+app_port: 443
+app_upstream_cidr: "10.0.40.30/32"
+
+# certs.yml's self-signed cert gets this CN/SAN instead of the public
+# paymenter.homelab.local name Prod-DMZ carries — Prod-DMZ pins a copy of
+# this specific cert (proxy_ssl_trusted_certificate) rather than trusting any
+# CA, so the name only needs to be internally consistent, not resolvable.
+tls_hostname: "prod-app.internal"

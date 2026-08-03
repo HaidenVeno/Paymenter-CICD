@@ -8,7 +8,11 @@
   vars:
     repo_root: "{{ playbook_dir }}/../.."
     certs_dir: "{{ repo_root }}/docker/secrets/certs"
-    tls_hostname: "paymenter.homelab.local"
+    # tls_hostname default lives in group_vars/all.yml, NOT here — play-level
+    # vars: outrank group_vars in Ansible's precedence order (the same bug
+    # harden.yml's management_cidr/allowed_web_sources hit in Phase 1).
+    # Declaring a default here would silently defeat
+    # group_vars/prod_app.yml's "prod-app.internal" override.
     use_certbot: false
 
   tasks:

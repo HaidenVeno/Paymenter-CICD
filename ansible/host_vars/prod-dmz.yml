@@ -1,0 +1,8 @@
+# Adapter-to-network mapping confirmed empirically (2026-08): VirtualBox
+# doesn't require adapter slot numbers to match across VMs, only that both
+# ends of an Internal Network share the same name — Prod-DMZ's slot order
+# turned out not to mirror Prod-App's. enp0s8 (mgmt) matched the group
+# default and needed no override.
+extra_netplan_ifaces:
+  - { iface: enp0s9, address: "10.0.40.30/24" }   # prodint -> Prod-App enp0s3
+  - { iface: enp0s10, address: "10.0.10.30/24" }  # attacknet -> Attacker/Ops (Phase 3, untested until that VM exists)
