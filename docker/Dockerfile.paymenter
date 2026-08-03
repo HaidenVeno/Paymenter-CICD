@@ -95,7 +95,8 @@ COPY docker/paymenter/www.conf         /usr/local/etc/php-fpm.conf
 COPY docker/paymenter/supervisord.conf /etc/supervisord.conf
 COPY docker/paymenter/entrypoint.sh    /entrypoint.sh
 
-RUN chmod +x /entrypoint.sh \
+RUN mkdir -p /app/var \
+    && chmod +x /entrypoint.sh \
     && chown -R nginx:nginx /app /var/log/supervisord /var/log/nginx /run/nginx /var/lib/nginx \
     && chmod -R 775 /app/storage
 

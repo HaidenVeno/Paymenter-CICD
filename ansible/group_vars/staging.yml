@@ -1,0 +1,9 @@
+# Overrides harden.yml's generic defaults with Staging's actual network.
+# harden.yml's built-in defaults (management_cidr: 192.168.0.0/24) don't match
+# this lab's mgmt subnet (10.0.20.0/24) — applying them as-is would nftables-
+# block SSH from the Runner (10.0.20.10) the moment harden.yml runs, locking
+# us out with no console access. Staging has no public NIC (internal-only,
+# see docs/network-topology.md), so scoping the web ports to mgmt-only too is
+# correct here, not just a lockout workaround.
+management_cidr: "10.0.20.0/24"
+allowed_web_sources: "10.0.20.0/24"
