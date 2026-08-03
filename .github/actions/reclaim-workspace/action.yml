@@ -1,0 +1,16 @@
+name: Reclaim workspace ownership
+description: >-
+  Self-hosted runners reuse the same _work directory across every job
+  (unlike GitHub-hosted ephemeral runners). Several steps in this pipeline
+  run Docker-based actions (dependency-check, gitleaks, trivy, semgrep,
+  ZAP, nikto) whose containers write output files as root by default.
+  Left behind, a single root-owned file blocks every later job's checkout
+  ("EACCES: permission denied, unlink ...") until someone notices and
+  cleans it up by hand. Run this as the last step of any job that touches
+  Docker, with if: always() so it still runs when the job itself failed.
+runs:
+  using: composite
+  steps:
+    - name: chown workspace back to the runner user
+      shell: bash
+      run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"

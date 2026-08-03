@@ -58,6 +58,8 @@ jobs:
         with:
           name: security-tests-results
           path: security/tests/security-tests-results.xml
+      - if: always()
+        uses: ./.github/actions/reclaim-workspace
 
   # ---- Stage 6: ZAP baseline DAST -------------------------------------------
   post-deploy-zap:
@@ -73,6 +75,8 @@ jobs:
           rules_file_name: 'security/zap/rules.tsv'
           fail_action: true
           allow_issue_writing: false
+      - if: always()
+        uses: ./.github/actions/reclaim-workspace
 
   # ---- Stage 6: Nikto (informational; diff against Lab 5 baseline) ----------
   post-deploy-nikto:
@@ -81,6 +85,7 @@ jobs:
     runs-on: self-hosted
     continue-on-error: true
     steps:
+      - uses: actions/checkout@v4
       - name: Run Nikto
         run: |
           if command -v nikto >/dev/null 2>&1; then
@@ -95,6 +100,8 @@ jobs:
         with:
           name: nikto-report
           path: nikto-report.html
+      - if: always()
+        uses: ./.github/actions/reclaim-workspace
 
   # ---- Stage 6: config audit (hardening still holds) ------------------------
   post-deploy-config-audit:
@@ -107,6 +114,8 @@ jobs:
         env:
           BASE_URL: ${{ env.BASE_URL }}
         run: bash security/tests/config-audit.sh
+      - if: always()
+        uses: ./.github/actions/reclaim-workspace
 
   notify:
     needs: [regression-tests, post-deploy-zap, post-deploy-config-audit]

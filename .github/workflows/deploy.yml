@@ -39,6 +39,9 @@ jobs:
             -t paymenter:local \
             .
 
+      - if: always()
+        uses: ./.github/actions/reclaim-workspace
+
   # ---------------------------------------------------------------------------
   # Image vulnerability scan. Report HIGH+CRITICAL as an artifact, then gate:
   # fail the pipeline on unfixed CRITICALs (documented threshold — see
@@ -48,8 +51,10 @@ jobs:
     needs: build
     runs-on: self-hosted
     steps:
+      - uses: actions/checkout@v4
+
       - name: Trivy scan (report HIGH,CRITICAL)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: 'paymenter:${{ github.sha }}'
           severity: 'HIGH,CRITICAL'
@@ -66,13 +71,16 @@ jobs:
           path: trivy-results.sarif
 
       - name: Gate on CRITICAL
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: 'paymenter:${{ github.sha }}'
           severity: 'CRITICAL'
           ignore-unfixed: true
           format: 'table'
           exit-code: '1'
+
+      - if: always()
+        uses: ./.github/actions/reclaim-workspace
 
   # ---------------------------------------------------------------------------
   # Provision host (Ansible: user/network/Docker/secrets/certs/firewall) on
@@ -125,6 +133,9 @@ jobs:
           done
           echo "app did not become healthy in time"; exit 1
           REMOTE
+
+      - if: always()
+        uses: ./.github/actions/reclaim-workspace
 
   notify:
     needs: [build, trivy-scan, deploy]
