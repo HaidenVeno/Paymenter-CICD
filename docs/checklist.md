@@ -32,14 +32,42 @@ executed on the self-hosted runner against the live instance.
 ## Stage 3 — Automated security test cases (`security-tests.yml`)
 - [x] **Done** — 11 test modules / 28 cases covering all 9 table rows + OAuth
   key perms; junit artifact; edge tests gate now, auth tests skip until seeded.
-- [x] **Done** — clean confirmed run on the runner: `regression-tests` (14
-  passed / 14 skipped / 0 failed — skips are the documented missing
-  auth-secret gap below, not bugs), `post-deploy-nikto`, and
+- [x] **Done** — clean confirmed run on the runner: `post-deploy-nikto` and
   `post-deploy-config-audit` all green. `post-deploy-zap`'s one real finding
   ("Content-Security-Policy Header Not Set") is fixed — see Stage 5/6 below
-  and `docs/allowlist.md`. Auth secrets (`ADMIN_API_TOKEN`, `CUSTOMER_COOKIE`,
-  `REMEMBER_COOKIE`, …) still not wired, so app-layer tests still skip —
-  tracked, not blocking.
+  and `docs/allowlist.md`.
+- [x] **Done** — auth secrets wired for real (`ADMIN_API_TOKEN`,
+  `REMEMBER_COOKIE`, `EXPIRED_COOKIE`), against real users/tokens/sessions
+  created on Staging, not placeholders. `regression-tests` now: **15 passed,
+  1 failed (a real finding, not a bug — see below), 12 skipped (all
+  documented, not blocking)**. Also fixed a real bug in the test harness
+  itself while wiring this: `conftest.py`'s `http` fixture tried to disable
+  redirect-following via `s.request = _req`, but `Session.get()`/`.post()`
+  inject `allow_redirects=True` into kwargs *before* calling `.request()`,
+  so the override silently never took effect for `.get()`/`.post()` calls —
+  fixed by overriding those methods directly.
+- **Real finding, currently unpatched**: `test_remember_mfa_bypass.py` fails
+  — presenting *only* a `paymenter_remember` cookie (no session, no
+  password, no 2FA) against `/admin` returns the actual Filament Dashboard
+  with `HTTP 200`, not the expected redirect. This is exactly the MFA-bypass
+  class the test was written to catch (Lab 5 s3.8) — confirmed live via
+  both `curl` and pytest, not a test-infra artifact. See `docs/allowlist.md`.
+- `CUSTOMER_COOKIE`, `UPGRADE_SERVICE_ID`, `CHECKOUT_PRODUCT_ID`,
+  `RACE_COUPON_CODE` deliberately **not** wired: the 5 tests that consume
+  them (`test_mass_assignment.py`, `test_config_injection.py`,
+  `test_coupon_race_condition.py`) `POST` to URLs assuming classic
+  server-rendered forms (`/checkout/{id}`, `/services/{id}/upgrade`,
+  `/cart`), but those flows are actually Livewire components — `GET`-only
+  routes (checkout is also at a different nested path entirely). Wiring
+  these secrets would make the tests **pass without ever exercising what
+  they claim to check** (a 404 from the wrong URL happens to satisfy their
+  current assertions) — worse than the honest skip. Rewriting them to speak
+  Livewire's real update-request protocol is tracked as separate follow-up
+  work, not done this session.
+- `LOWPRIV_API_TOKEN`/`LOWPRIV_ROLE_ID` also not wired: confirmed live
+  (`404`, `"route api/v1/admin/roles/1 could not be found"`) that
+  `test_rbac_wildcard.py` targets an API resource that was never registered
+  in `routes/api.php` at all — no route exists to test against.
 
 ## Stage 4 — Developer notification
 - [x] **Done** — Discord webhook + GitHub Issue on failure in `ci.yml`,

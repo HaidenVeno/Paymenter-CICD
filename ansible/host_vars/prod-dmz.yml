@@ -3,6 +3,13 @@
 # ends of an Internal Network share the same name — Prod-DMZ's slot order
 # turned out not to mirror Prod-App's. enp0s8 (mgmt) matched the group
 # default and needed no override.
+#
+# Phase 4 topology change: enp0s10 was attacknet in Phase 2 (Attacker/Ops VM
+# never existed yet, untested) — the lab was re-adapter'd so enp0s10 is now
+# prodnet instead. attacknet is deliberately deferred to a later increment
+# (no adapter for it on this host right now). prodnet itself is pre-staged/
+# idle this session too — nothing routes over it yet (that's the bastion
+# increment); this just makes the address persistent ahead of that.
 extra_netplan_ifaces:
   - { iface: enp0s9, address: "10.0.40.30/24" }   # prodint -> Prod-App enp0s3
-  - { iface: enp0s10, address: "10.0.10.30/24" }  # attacknet -> Attacker/Ops (Phase 3, untested until that VM exists)
+  - { iface: enp0s10, address: "10.0.30.30/24" }  # prodnet -> Prod-App enp0s10 (idle until the bastion increment)

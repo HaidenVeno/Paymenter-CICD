@@ -222,4 +222,78 @@ under `IGNORE` instead of `WARN`, and the job passes end to end.
   container not found / docker unavailable" — same runner-vs-deploy-target
   assumption `config-audit.sh` had until Phase 1's fix, just not yet ported
   to this test file. Skips gracefully (doesn't fail the suite), so it's
-  lower priority than the fixes that were actually blocking.
+  lower priority than the fixes that were actually blocking. Note: the
+  `oauth-private.key`/`oauth-public.key` this test checks didn't exist on
+  Staging at all until this session (`php artisan passport:keys`, needed to
+  generate real admin API tokens) — and they live outside every named
+  volume in `docker-compose.app-core.yml` (only `storage/logs` and
+  `storage/app/public` are volumes), so they're in the container's
+  ephemeral layer and **will be lost on the next recreate**. Not fixed this
+  session — either add a volume for them or generate them as part of
+  provisioning (`secrets.yml`-style create-once).
+
+## Auth secrets wiring (Stage 3 regression suite) — findings
+
+Walked through wiring the `security-tests.yml` auth-dependent secrets
+against real Staging data (real users/API keys/sessions, not placeholders).
+Full detail in `docs/checklist.md` Stage 3; summary here:
+
+- **Real, currently unpatched vulnerability**: `test_remember_mfa_bypass.py`
+  fails for real. A request to `/admin` carrying *only* a
+  `paymenter_remember` cookie (no session, no password, no 2FA) returns the
+  actual Filament Dashboard at `HTTP 200` — the exact MFA-bypass class Lab 5
+  s3.8 was supposed to have fixed. Confirmed via both a manual `curl` and
+  the pytest run, on Staging's current deployed code. This needs a decision
+  from whoever owns the app fork (`HaidenVeno/Paymenter`) — it's flagged
+  here, not silently patched, since fixing app logic is a bigger call than
+  wiring a secret.
+- **Discovered the real auth mechanism differs from what the test suite's
+  env-var names imply**: the admin API (`/api/v1/admin/*`) is authorized by
+  a custom `ApiKey` model (SHA-256-hashed token, `type`/`permissions`
+  columns), *not* Laravel Passport OAuth tokens — despite Passport being
+  present and used elsewhere (`oauth-*.key`, `passport:client`). A Passport
+  personal-access token looks superficially valid but gets a genuinely
+  different `401` ("provided API key is invalid or has been disabled") from
+  a custom middleware, not Passport's own error. `ADMIN_API_TOKEN` is now a
+  real `ApiKey` row with the full real permission set (33 `admin.<resource>.
+  <action>` strings pulled from the actual `FormRequest` classes — there's
+  no wildcard support in this system, unlike the web-session RBAC's
+  `hasPermission()`).
+- **`/api/v1/admin/roles` was never registered as an API route at all**
+  (`routes/api.php`'s `Route::apiResources([...])` list has categories,
+  credits, users, products, services, orders, invoices, invoice-items,
+  tickets, ticket-messages — no roles). Confirmed live: `404`, `"route
+  api/v1/admin/roles/1 could not be found"`. `test_rbac_wildcard.py`'s
+  documented fix (RoleResource/RolePolicy self-escalation prevention) is a
+  **Filament admin-panel** protection, not a REST API one — the test was
+  written against an endpoint that doesn't exist. `LOWPRIV_API_TOKEN`/
+  `LOWPRIV_ROLE_ID` left unset; wiring them would just turn a skip into a
+  spurious 404-driven failure, not real coverage.
+- **Checkout/Upgrade/Cart are Livewire components, not classic forms** —
+  `/services/{id}/upgrade`, `/products/{category}/{product}/checkout`
+  (nested, not the flat `/checkout/{id}` the tests assume), and `/cart` are
+  all registered `GET`-only; real interactivity goes through Livewire's own
+  AJAX update protocol, not a plain form `POST`. `test_mass_assignment.py`,
+  `test_config_injection.py`, and `test_coupon_race_condition.py` all
+  `POST` to guessed URLs that 404 — which happens to satisfy their current
+  assertions (`status_code < 500`, not in `(200,201,302)`), so they'd
+  **pass without testing anything real** if their secrets were wired as-is.
+  `CUSTOMER_COOKIE`, `UPGRADE_SERVICE_ID`, `CHECKOUT_PRODUCT_ID`,
+  `RACE_COUPON_CODE` deliberately left unset rather than manufacture a false
+  sense of coverage; rewriting these three tests to drive Livewire's actual
+  request format (reverse-engineered this session: `POST
+  {base}/paymenter/update` — a custom-named alias for Livewire's update
+  route — with a JSON body of `{_token, components: [{snapshot, updates,
+  calls}]}`, snapshot pulled from the page's `wire:snapshot` attribute) is
+  tracked as separate follow-up work.
+- **Fixed a real bug in the test harness itself**: `conftest.py`'s `http`
+  fixture tried to force `allow_redirects=False` by wrapping
+  `s.request`, but `requests.Session.get()`/`.post()` inject
+  `allow_redirects=True` into kwargs themselves *before* calling
+  `.request()` — so the fixture's `setdefault()` never actually saw a
+  missing key for any test calling `.get()`/`.post()` (the common case).
+  `test_expired_session_cookie_rejected` was silently chasing the app's
+  redirect target instead of just inspecting the 302, and erroring out
+  trying to connect to it directly. Fixed by overriding `.get`/`.post`/
+  `.patch`/`.put`/`.delete` directly instead of relying on `.request()`
+  alone.

@@ -53,7 +53,20 @@ def http():
         kw.setdefault("allow_redirects", False)
         return orig(method, url, **kw)
 
+    # Patching s.request alone doesn't work: Session.get/post/etc each set
+    # allow_redirects=True in kwargs themselves before calling s.request(),
+    # so our setdefault() above never sees a missing key to default. A test
+    # calling http.get(...) expecting no-redirect-follow (e.g.
+    # test_expired_session_cookie_rejected) would silently chase the app's
+    # redirect target instead — found this when that test errored out
+    # trying to connect to the Location header's host directly rather than
+    # just inspecting the 302 it was supposed to check.
     s.request = _req
+    s.get = lambda url, **kw: _req("GET", url, **kw)
+    s.post = lambda url, **kw: _req("POST", url, **kw)
+    s.patch = lambda url, **kw: _req("PATCH", url, **kw)
+    s.put = lambda url, **kw: _req("PUT", url, **kw)
+    s.delete = lambda url, **kw: _req("DELETE", url, **kw)
     return s
 
 
