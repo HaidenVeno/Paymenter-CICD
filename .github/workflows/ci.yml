@@ -33,15 +33,6 @@ jobs:
           repository: ${{ env.APP_REPO }}
           ref: ${{ env.APP_REF }}
           path: app
-      # Docker image, not the pip CLI — matches what's actually validated
-      # (docs/CLAUDE.md's local-validation command uses semgrep/semgrep too;
-      # a bare `pip install semgrep` was never run anywhere before this).
-      # Scoped to first-party app code — excludes the app fork's own Docker/CI
-      # tooling (its Dockerfile, .github/), which this pipeline never builds
-      # from (we use docker/Dockerfile.paymenter, not app/Dockerfile) and
-      # doesn't control the hardening of anyway. Those files still get
-      # scanned by the report-only step below and archived for review —
-      # this only narrows what can block the pipeline.
       - name: Blocking gate — ERROR severity (custom + p/default + OWASP Top 10)
         run: >-
           docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep
