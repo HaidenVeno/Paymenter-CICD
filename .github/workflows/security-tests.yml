@@ -105,9 +105,12 @@ jobs:
         uses: ./.github/actions/reclaim-workspace
 
   # ---- Stage 6: Nikto (informational; diff against Lab 5 baseline) ----------
+  # Skippable via the SKIP_NIKTO repo variable — it's the slowest job and only
+  # informational (not in notify's needs, continue-on-error), so a run can opt
+  # out of it (e.g. a fast full-pipeline exercise) by setting SKIP_NIKTO=true.
   post-deploy-nikto:
     needs: gate
-    if: needs.gate.outputs.go == 'true'
+    if: needs.gate.outputs.go == 'true' && vars.SKIP_NIKTO != 'true'
     runs-on: self-hosted
     continue-on-error: true
     steps:
