@@ -213,10 +213,43 @@ jobs:
         uses: ./.github/actions/reclaim-workspace
 
   # ---------------------------------------------------------------------------
+  # PHP static analysis — PHPStan / larastan (level 5). Type-aware, Laravel-aware
+  # analysis that Semgrep's pattern rules can't do. Gates on NEWLY-introduced
+  # errors only: the app repo commits phpstan-baseline.neon capturing the 539
+  # pre-existing findings, so a clean tree is green and a push/PR that adds a new
+  # type error (etc.) fails. Runs in the composer image; a throwaway sqlite .env
+  # with a random APP_KEY is enough for larastan to boot the app (the error set
+  # is deterministic on the code, not the env).
+  # ---------------------------------------------------------------------------
+  phpstan:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout pipeline repo
+        uses: actions/checkout@v4
+      - name: Checkout application source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.APP_REPO }}
+          ref: ${{ env.APP_REF }}
+          path: app
+      - name: PHPStan (larastan) — new-error gate
+        run: >-
+          docker run --rm -v "$PWD/app:/app" -w /app composer:2 sh -c '
+          composer install --no-interaction --no-progress --no-scripts --ignore-platform-reqs -q &&
+          cp -n .env.example .env &&
+          sed -i "s#^APP_KEY=.*#APP_KEY=base64:$(head -c 32 /dev/urandom | base64)#" .env &&
+          sed -i "s#^DB_CONNECTION=.*#DB_CONNECTION=sqlite#" .env &&
+          touch database/database.sqlite &&
+          php -d memory_limit=2G vendor/bin/phpstan analyse --no-progress --error-format=github
+          '
+      - if: always()
+        uses: ./.github/actions/reclaim-workspace
+
+  # ---------------------------------------------------------------------------
   # Developer notification — fires if any scan gate above fails (Stage 4).
   # ---------------------------------------------------------------------------
   notify:
-    needs: [semgrep, eslint-security, gitleaks, hadolint, trivy-config, dependency-check]
+    needs: [semgrep, eslint-security, gitleaks, hadolint, trivy-config, dependency-check, phpstan]
     if: failure()
     runs-on: self-hosted
     permissions:
@@ -244,8 +277,9 @@ jobs:
               repo: context.repo.repo,
               title: `Security scan failure — run ${context.runId}`,
               body: `A CI security scan failed on \`${context.ref}\`.\n\n` +
-                    `Layers: Semgrep (SAST), ESLint, Gitleaks (secrets), Hadolint, ` +
-                    `Trivy config (IaC), Dependency-Check (SCA).\n\n` +
+                    `Layers: Semgrep (SAST), PHPStan/larastan (PHP types), ESLint, ` +
+                    `Gitleaks (secrets), Hadolint, Trivy config (IaC), ` +
+                    `Dependency-Check (SCA).\n\n` +
                     `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
               labels: ['security']
             });
