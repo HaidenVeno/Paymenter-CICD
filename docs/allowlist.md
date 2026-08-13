@@ -218,19 +218,20 @@ under `IGNORE` instead of `WARN`, and the job passes end to end.
     `robots.txt` (10015), `Session Management Response Identified` (10112 —
     ZAP noting it found the session cookie for its own analysis, not a
     vulnerability).
-- **`security/tests/auth/test_oauth_key_perms.py`** skips with "paymenter
-  container not found / docker unavailable" — same runner-vs-deploy-target
-  assumption `config-audit.sh` had until Phase 1's fix, just not yet ported
-  to this test file. Skips gracefully (doesn't fail the suite), so it's
-  lower priority than the fixes that were actually blocking. Note: the
-  `oauth-private.key`/`oauth-public.key` this test checks didn't exist on
-  Staging at all until this session (`php artisan passport:keys`, needed to
-  generate real admin API tokens) — and they live outside every named
-  volume in `docker-compose.app-core.yml` (only `storage/logs` and
-  `storage/app/public` are volumes), so they're in the container's
-  ephemeral layer and **will be lost on the next recreate**. Not fixed this
-  session — either add a volume for them or generate them as part of
-  provisioning (`secrets.yml`-style create-once).
+- **`security/tests/auth/test_oauth_key_perms.py`** now runs for real
+  (fixed in a later session, see below) — it used to skip with "paymenter
+  container not found / docker unavailable" because it shelled out to a
+  *local* `docker`, which never finds anything since the Runner and Staging
+  are different hosts (same runner-vs-deploy-target class of bug
+  `config-audit.sh` had until Phase 1's fix). Note: `oauth-private.key`/
+  `oauth-public.key` live outside every named volume in
+  `docker-compose.app-core.yml` (only `storage/logs` and `storage/app/
+  public` are volumes), so they're in the container's ephemeral layer and
+  are lost on every recreate — confirmed twice now (once initially, once
+  after a full lab reboot). **Still not fixed** — either add a volume for
+  them or generate them as part of provisioning (`secrets.yml`-style
+  create-once); currently requires manually re-running `php artisan
+  passport:keys` after any recreate.
 
 ## Auth secrets wiring (Stage 3 regression suite) — findings
 
@@ -263,29 +264,108 @@ Full detail in `docs/checklist.md` Stage 3; summary here:
   (`routes/api.php`'s `Route::apiResources([...])` list has categories,
   credits, users, products, services, orders, invoices, invoice-items,
   tickets, ticket-messages — no roles). Confirmed live: `404`, `"route
-  api/v1/admin/roles/1 could not be found"`. `test_rbac_wildcard.py`'s
-  documented fix (RoleResource/RolePolicy self-escalation prevention) is a
-  **Filament admin-panel** protection, not a REST API one — the test was
-  written against an endpoint that doesn't exist. `LOWPRIV_API_TOKEN`/
-  `LOWPRIV_ROLE_ID` left unset; wiring them would just turn a skip into a
-  spurious 404-driven failure, not real coverage.
+  api/v1/admin/roles/1 could not be found"`. Role editing is a **Filament
+  admin-panel** page (`admin/roles/{record}/edit`), not a REST API resource
+  — RBAC there is enforced against the web session, not the `ApiKey`
+  permission system. `test_rbac_wildcard.py` has since been rewritten
+  against the real mechanism (see below) rather than left pointed at a
+  route that doesn't exist.
 - **Checkout/Upgrade/Cart are Livewire components, not classic forms** —
   `/services/{id}/upgrade`, `/products/{category}/{product}/checkout`
-  (nested, not the flat `/checkout/{id}` the tests assume), and `/cart` are
-  all registered `GET`-only; real interactivity goes through Livewire's own
-  AJAX update protocol, not a plain form `POST`. `test_mass_assignment.py`,
-  `test_config_injection.py`, and `test_coupon_race_condition.py` all
-  `POST` to guessed URLs that 404 — which happens to satisfy their current
-  assertions (`status_code < 500`, not in `(200,201,302)`), so they'd
-  **pass without testing anything real** if their secrets were wired as-is.
-  `CUSTOMER_COOKIE`, `UPGRADE_SERVICE_ID`, `CHECKOUT_PRODUCT_ID`,
-  `RACE_COUPON_CODE` deliberately left unset rather than manufacture a false
-  sense of coverage; rewriting these three tests to drive Livewire's actual
-  request format (reverse-engineered this session: `POST
-  {base}/paymenter/update` — a custom-named alias for Livewire's update
-  route — with a JSON body of `{_token, components: [{snapshot, updates,
-  calls}]}`, snapshot pulled from the page's `wire:snapshot` attribute) is
-  tracked as separate follow-up work.
+  (nested, not the flat `/checkout/{id}` the tests originally assumed), and
+  `/cart` are all registered `GET`-only; real interactivity goes through
+  Livewire's own AJAX update protocol, not a plain form `POST`. The
+  original `test_mass_assignment.py`, `test_config_injection.py`, and
+  `test_coupon_race_condition.py` all `POST`ed to guessed URLs that 404'd —
+  which happened to satisfy their assertions (`status_code < 500`, not in
+  `(200,201,302)`) without exercising anything real.
+
+**Follow-up session: all 5 of the above rewritten to drive the real
+mechanism, not left skipping.** `security/tests/livewire_helpers.py` speaks
+Livewire v3's actual protocol: GET the page, pull the target component's
+`wire:snapshot` (HTML-entity-decoded JSON) and CSRF token out of the HTML,
+then `POST {base}/paymenter/update` — a custom-named alias for Livewire's
+update route (`AppServiceProvider::boot()`), not the framework default
+`/livewire/update` — with `{_token, components: [{snapshot, updates,
+calls}]}`; `continue_livewire_call()`/`post_snapshot_update()` chain a
+follow-up action off a *prior* response's snapshot instead of re-GETing the
+page, both for protocol fidelity (a real browser reuses server-returned
+state across an interaction) and because re-GETing `/cart` on every step of
+a multi-step flow collides with the `limit_req zone=cart` virtual patch
+below. `security/tests/remote_helpers.py` adds SSH-based ground truth
+(container/DB queries against the deploy target, not the Runner) for
+assertions the admin API can't answer — `remote_mysql()` base64-encodes SQL
+before it ever touches a shell, after a real statement (a JSON permissions
+array with embedded double quotes) got silently mangled by nested shell
+quoting across the SSH-login-shell + `docker exec sh -c` layers.
+
+- `test_config_injection.py` — 6 payload cases (xss/sqli/cmdi/ssti/path/
+  nullbyte) against the checkout config-option field, checking the
+  *rendered HTML fragment* (not the raw JSON body, which necessarily echoes
+  submitted state as part of normal hydration). All 6 pass genuinely now.
+- `test_mass_assignment.py` — drives `services.upgrade`'s real `doUpgrade`
+  action with a config_option_id outside the product's allowlist, then
+  verifies via direct DB query that no `service_configs` row was ever
+  persisted for it. Passes — the allowlist protection in
+  `App\Livewire\Services\Upgrade::doUpgrade()` is genuinely correct.
+- `test_coupon_race_condition.py` — N distinct customer accounts each add
+  the product to cart and apply a **dedicated** race-test coupon (never a
+  real one), then all fire `checkout()` concurrently; verified via DB count
+  of `services.coupon_id`. Since every CI run permanently adds real
+  redemptions to whatever coupon is used, a fixed `max_uses` would only ever
+  prove anything on the coupon's first run — this pins `max_uses` to
+  `current_count + N_slots` immediately before each race (SSH DB write), so
+  the test stays meaningful indefinitely instead of degrading once the
+  coupon "fills up". Kept `xfail(strict=False)` — Lab 5 explicitly declined
+  to patch the missing row lock, and a real network hop's timing means the
+  race isn't guaranteed to be caught on every run either way.
+- `test_rbac_wildcard.py` — uses a low-privilege **session cookie**
+  (`LOWPRIV_COOKIE`, not an API token) against the real Filament edit page.
+  **This found a genuine, currently-exploitable full-admin self-escalation**
+  — see the dedicated section below. Reverts the DB state in a `finally`
+  block regardless of pass/fail, so running this test never leaves an
+  account actually escalated afterward.
+- `test_oauth_key_perms.py` — switched from local `docker exec` to
+  `remote_helpers.py`'s SSH-based container resolution, so it actually runs
+  in CI (previously always skipped there, silently, since the Runner never
+  has the container locally). **Found a second genuine finding** — see
+  below.
+
+New env vars this added: `LOWPRIV_COOKIE`, `CHECKOUT_CATEGORY_SLUG`,
+`CHECKOUT_PRODUCT_SLUG`, `CHECKOUT_CONFIG_OPTION_ID`, `CHECKOUT_PLAN_ID`,
+`RACE_CUSTOMER_COOKIES` (comma-separated, >= 2 accounts), `RACE_COUPON_CODE`,
+`RACE_COUPON_SLOTS`. `ADMIN_API_TOKEN`/`LOWPRIV_API_TOKEN` and their
+`admin_token`/`lowpriv_token` fixtures are now unused by any test file (no
+API resource exists for what they were built to authorize) — left in
+`conftest.py` rather than removed as part of this rewrite, since deleting
+them wasn't part of the task.
+
+## New findings from the Livewire rewrite
+
+- **RBAC self-escalation, currently unpatched (Lab 4 s1.2/10.2, Lab 5
+  s3.5-s3.6)**: a "viewer" staff account holding only `admin.roles.viewAny`/
+  `admin.roles.view` (no `admin.roles.update`) can grant **itself** wildcard
+  (`*`) permissions by editing its own role through the Filament panel.
+  Live-verified end-to-end, then reverted: the write reaches the `roles`
+  table (`permissions` went from `["admin.roles.viewAny","admin.roles.
+  view"]` to `["*"]`). Root cause: `App\Admin\Resources\RoleResource::
+  canEdit()` is hardcoded to `return $record->id !== 1;` — it never
+  consults `RolePolicy::update()` (which does check `admin.roles.update`),
+  so any user who can reach the Roles resource can edit any role except the
+  seeded id=1. `App\Models\Role` has no save-time guard rejecting `'*'` for
+  a non-seeded role either; the `CheckboxList` form field only constrains
+  the browser UI, and posting `data.permissions: ["*"]` directly via the
+  Livewire update protocol bypasses it entirely. This contradicts what the
+  test previously assumed was already fixed — that fix either regressed or
+  was never applied to this fork. Flagged to the project owner; decision was
+  to land the regression test now (documenting the gap honestly) and treat
+  the actual app-code fix as follow-up work, same deferral as the MFA
+  bypass.
+- **OAuth client secrets still plaintext (Lab 4 s2.1, claimed-fixed s3.4)**:
+  `oauth_google_client_secret`, `oauth_github_client_secret`, and
+  `oauth_discord_client_secret` are all still declared `'type' => 'text'`
+  in `app/Classes/Settings.php`. The claimed fix (`'type' => 'password',
+  'encrypted' => true`, applied via migration) isn't present in this fork.
 - **Fixed a real bug in the test harness itself**: `conftest.py`'s `http`
   fixture tried to force `allow_redirects=False` by wrapping
   `s.request`, but `requests.Session.get()`/`.post()` inject

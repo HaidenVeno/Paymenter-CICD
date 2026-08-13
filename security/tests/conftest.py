@@ -13,6 +13,7 @@ Environment variables (all optional except BASE_URL, which has a default):
   ADMIN_API_TOKEN       full-access admin API bearer token
   LOWPRIV_API_TOKEN     restricted API token (only a narrow permission)
   CUSTOMER_COOKIE       Cookie header value for an authenticated customer
+  LOWPRIV_COOKIE        Cookie header value for a low-privilege staff session
   REMEMBER_COOKIE       value of a captured paymenter_remember cookie
   EXPIRED_COOKIE        value of a known-expired paymenter_session cookie
   PAYMENTER_CONTAINER   container name/id (default: discovered via compose)
@@ -91,6 +92,14 @@ def customer_cookie():
     c = _env("CUSTOMER_COOKIE")
     if not c:
         pytest.skip("CUSTOMER_COOKIE not set — configure to enable this test")
+    return c
+
+
+@pytest.fixture()
+def lowpriv_cookie():
+    c = _env("LOWPRIV_COOKIE")
+    if not c:
+        pytest.skip("LOWPRIV_COOKIE not set — configure to enable this test")
     return c
 
 

@@ -52,22 +52,44 @@ executed on the self-hosted runner against the live instance.
   with `HTTP 200`, not the expected redirect. This is exactly the MFA-bypass
   class the test was written to catch (Lab 5 s3.8) — confirmed live via
   both `curl` and pytest, not a test-infra artifact. See `docs/allowlist.md`.
-- `CUSTOMER_COOKIE`, `UPGRADE_SERVICE_ID`, `CHECKOUT_PRODUCT_ID`,
-  `RACE_COUPON_CODE` deliberately **not** wired: the 5 tests that consume
-  them (`test_mass_assignment.py`, `test_config_injection.py`,
-  `test_coupon_race_condition.py`) `POST` to URLs assuming classic
-  server-rendered forms (`/checkout/{id}`, `/services/{id}/upgrade`,
-  `/cart`), but those flows are actually Livewire components — `GET`-only
-  routes (checkout is also at a different nested path entirely). Wiring
-  these secrets would make the tests **pass without ever exercising what
-  they claim to check** (a 404 from the wrong URL happens to satisfy their
-  current assertions) — worse than the honest skip. Rewriting them to speak
-  Livewire's real update-request protocol is tracked as separate follow-up
-  work, not done this session.
-- `LOWPRIV_API_TOKEN`/`LOWPRIV_ROLE_ID` also not wired: confirmed live
-  (`404`, `"route api/v1/admin/roles/1 could not be found"`) that
-  `test_rbac_wildcard.py` targets an API resource that was never registered
-  in `routes/api.php` at all — no route exists to test against.
+- **Follow-up session — the 5 tests above are now genuinely rewritten and
+  running**, not skipped. `security/tests/livewire_helpers.py` drives
+  Checkout/Upgrade/Cart's real AJAX protocol (`POST {base}/paymenter/update`
+  with a `wire:snapshot` pulled from the page, matching how the actual
+  frontend talks to these components) instead of the guessed classic-form
+  URLs that used to 404 their way to a false pass. `security/tests/
+  remote_helpers.py` adds SSH-based ground-truth DB/container verification
+  against the deploy target (the admin API doesn't expose enough detail for
+  some of these, e.g. per-service config rows) — also used to fix
+  `test_oauth_key_perms.py`'s own bug (it shelled out to a *local* `docker`,
+  which silently never found anything in CI since the Runner and Staging
+  are different hosts). Full local suite run: **23 passed, 2 failed (both
+  real, newly-confirmed findings — see below), 1 xfail (coupon race,
+  disclosed/accepted risk), 2 skipped** (`REMEMBER_COOKIE`/`EXPIRED_COOKIE`
+  — separate secrets, unrelated to this rewrite).
+- **New real finding #1 — RBAC self-escalation, currently unpatched**:
+  `test_rbac_wildcard.py` (rewritten against the real mechanism — see
+  `docs/allowlist.md`) fails. A "viewer" staff account holding only
+  `admin.roles.viewAny`/`admin.roles.view` can grant **itself** wildcard
+  (`*`, full-admin) permissions by editing its own role through the
+  Filament panel. Live-verified end-to-end (then reverted): the write lands
+  in the `roles` table. `RoleResource::canEdit()` is hardcoded to
+  `$record->id !== 1` and never consults `RolePolicy::update()`; `Role.php`
+  has no save-time guard against `'*'`. This contradicts what the test
+  previously assumed was already fixed (Lab 4 s1.2/10.2, Lab 5 s3.5-s3.6) —
+  that fix either regressed or was never applied to this fork.
+- **New real finding #2 — OAuth client secrets still plaintext**:
+  `test_oauth_key_perms.py::test_oauth_client_secrets_not_plaintext` fails.
+  All three OAuth client-secret settings (`oauth_google_client_secret`,
+  `oauth_github_client_secret`, `oauth_discord_client_secret`) are still
+  declared `'type' => 'text'` in `app/Classes/Settings.php` — the claimed
+  s3.4 fix (`'type' => 'password', 'encrypted' => true`) isn't present in
+  this fork. The key-permissions half of this test file passes
+  (`oauth-private.key` is `600`) — but note it has to be regenerated after
+  every container recreate (`php artisan passport:keys`); the keys live
+  outside every named volume, a known unfixed gap (see `docs/allowlist.md`).
+- Both new findings are left as hard (non-xfail) gates, same treatment as
+  the MFA bypass — real regressions, not accepted/disclosed risk.
 
 ## Stage 4 — Developer notification
 - [x] **Done** — Discord webhook + GitHub Issue on failure in `ci.yml`,
