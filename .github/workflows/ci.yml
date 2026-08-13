@@ -9,7 +9,7 @@ on:
 # repo. Override these as repo variables if the branch/fork changes.
 env:
   APP_REPO: ${{ vars.APP_REPO || 'HaidenVeno/Paymenter' }}
-  APP_REF:  ${{ vars.APP_REF  || 'fix/upgrade-configoptions-injection' }}
+  APP_REF:  ${{ vars.APP_REF  || 'demo/mass-assignment-vuln' }}
 
 jobs:
   # ---------------------------------------------------------------------------
