@@ -49,14 +49,19 @@ jobs:
           BASE_URL: ${{ env.BASE_URL }}
           VERIFY_TLS: ${{ env.VERIFY_TLS }}
           ADMIN_API_TOKEN: ${{ secrets.ADMIN_API_TOKEN }}
-          LOWPRIV_API_TOKEN: ${{ secrets.LOWPRIV_API_TOKEN }}
           LOWPRIV_ROLE_ID: ${{ vars.LOWPRIV_ROLE_ID }}
+          LOWPRIV_COOKIE: ${{ secrets.LOWPRIV_COOKIE }}
           CUSTOMER_COOKIE: ${{ secrets.CUSTOMER_COOKIE }}
           REMEMBER_COOKIE: ${{ secrets.REMEMBER_COOKIE }}
           EXPIRED_COOKIE: ${{ secrets.EXPIRED_COOKIE }}
           UPGRADE_SERVICE_ID: ${{ vars.UPGRADE_SERVICE_ID }}
-          CHECKOUT_PRODUCT_ID: ${{ vars.CHECKOUT_PRODUCT_ID }}
+          CHECKOUT_CATEGORY_SLUG: ${{ vars.CHECKOUT_CATEGORY_SLUG }}
+          CHECKOUT_PRODUCT_SLUG: ${{ vars.CHECKOUT_PRODUCT_SLUG }}
+          CHECKOUT_CONFIG_OPTION_ID: ${{ vars.CHECKOUT_CONFIG_OPTION_ID }}
+          CHECKOUT_PLAN_ID: ${{ vars.CHECKOUT_PLAN_ID }}
           RACE_COUPON_CODE: ${{ secrets.RACE_COUPON_CODE }}
+          RACE_COUPON_SLOTS: ${{ vars.RACE_COUPON_SLOTS }}
+          RACE_CUSTOMER_COOKIES: ${{ secrets.RACE_CUSTOMER_COOKIES }}
         # `pip install --break-system-packages` (no --user, but PEP 668 forces
         # user-site anyway) puts the pytest console-script shim in
         # ~/.local/bin, which isn't on PATH for this non-interactive shell —
