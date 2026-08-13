@@ -111,6 +111,17 @@ echo "Setting storage permissions (775)."
 chmod -R 775 /app/storage 2>/dev/null || true
 chmod -R 775 /app/themes /app/extensions 2>/dev/null || true
 
+## Passport signing keys (Lab 4 s2.1-s2.2 / Lab 5 s3.1). These live in
+## /app/storage, outside every named volume, so they're recreated with the
+## container. Generate them if absent, then force 600 — the blanket
+## `chmod -R 775 /app/storage` above would otherwise leave the private key
+## world-readable (found live: 775). Must come AFTER that chmod.
+if [ ! -f /app/storage/oauth-private.key ]; then
+  echo "Generating Passport signing keys."
+  php artisan passport:keys --no-interaction || true
+fi
+chmod 600 /app/storage/oauth-private.key /app/storage/oauth-public.key 2>/dev/null || true
+
 ## migrate + seed
 echo "Migrating and seeding database."
 php artisan migrate --seed --force

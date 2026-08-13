@@ -227,11 +227,12 @@ under `IGNORE` instead of `WARN`, and the job passes end to end.
   `oauth-public.key` live outside every named volume in
   `docker-compose.app-core.yml` (only `storage/logs` and `storage/app/
   public` are volumes), so they're in the container's ephemeral layer and
-  are lost on every recreate — confirmed twice now (once initially, once
-  after a full lab reboot). **Still not fixed** — either add a volume for
-  them or generate them as part of provisioning (`secrets.yml`-style
-  create-once); currently requires manually re-running `php artisan
-  passport:keys` after any recreate.
+  are lost on every recreate — confirmed multiple times (initially, after a
+  full lab reboot, and again after a VM crash). **Now fixed in
+  `docker/paymenter/entrypoint.sh`**: it generates the keys with
+  `passport:keys` if absent and forces `600` — importantly *after* the
+  blanket `chmod -R 775 /app/storage`, which was itself leaving the private
+  key world-readable (found live at `775`, failing the perms assertion).
 
 ## Auth secrets wiring (Stage 3 regression suite) — findings
 
